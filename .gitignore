@@ -10,6 +10,10 @@ wheels/
 .venv
 
 # Project specific
+# Everything under data/ is generated and stays out of git. The one exception is
+# each dataset's hand-corrected annotation-manual/, which no script can rebuild;
+# it lives in a git repository of its own at that path, independent of this one.
+# See docs/annotation_manual.md.
 /data
 /temp
 /git_commit_message.txt

@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import font as tkfont, messagebox, ttk
 
-from tooltip.dataset_paths import annotation_dir, images_dir, resolve_path, segmentation_dir
+from tooltip.annotation import (
+    ANNOTATION_SUFFIX,
+    SOURCE_AUTO,
+    SOURCE_MANUAL,
+    build_payload,
+    extract_annotations,
+    write_annotation,
+)
+from tooltip.dataset_paths import (
+    annotation_dir,
+    annotation_manual_dir,
+    images_dir,
+    list_datasets,
+    resolve_path,
+    segmentation_dir,
+)
 
 try:
     import cv2
@@ -32,6 +48,38 @@ TIP_RADIUS = 6
 SEGMENTATION_ALPHA = 0.35
 MIN_BOX_SIZE = 4
 
+# Manually corrected frames are highlighted in the image list. tk.Listbox has no
+# per-item font option, so colour is the only way to make them stand out.
+MANUAL_ITEM_BACKGROUND = "#ffe9a8"
+MANUAL_ITEM_FOREGROUND = "#1a1a1a"
+MANUAL_ITEM_SELECT_BACKGROUND = "#e8a33d"
+MANUAL_ITEM_SELECT_FOREGROUND = "#1a1a1a"
+
+# The tool number drawn on each bbox, as a multiple of the canvas default font.
+ANNOTATION_LABEL_FONT_SCALE = 2
+
+# Toolbar buttons are colour-coded by what they do: creating, destroying,
+# writing to disk, and discarding in-memory edits.
+BUTTON_STYLES = {
+    "Add.TButton": "#1565c0",     # blue
+    "Delete.TButton": "#c62828",  # red
+    "Save.TButton": "#e65100",    # orange
+    "Reload.TButton": "#6a1b9a",  # purple
+    "Revert.TButton": "#2e7d32",  # green
+}
+ADD_ACTIVE_STYLE = "AddActive.TButton"
+ADD_ACTIVE_BACKGROUND = "#ffe680"
+ADD_ACTIVE_HOVER_BACKGROUND = "#ffd84d"
+BUTTON_DISABLED_FOREGROUND = "#9e9e9e"
+
+# Button labels carry their shortcut so the toolbar documents itself.
+ADD_BUTTON_LABEL = "Add Tool [INS]"
+ADD_BUTTON_ACTIVE_LABEL = "Adding... (Esc to cancel)"
+DELETE_BUTTON_LABEL = "Delete Tool [DEL]"
+SAVE_BUTTON_LABEL = "Save [F2]"
+RELOAD_BUTTON_LABEL = "Reload [F3]"
+REVERT_BUTTON_LABEL = "Revert to Auto [F4]"
+
 
 class AnnotationEditor:
     def __init__(self, args: argparse.Namespace) -> None:
@@ -39,13 +87,29 @@ class AnnotationEditor:
         self.images_root = args.images
         self.segmentation_root = args.segmentation
         self.annotation_root = args.annotation
+        self.manual_root = args.manual
+        self.current_dataset = args.dataset or ""
+        self.dataset_locked = args.dataset_locked
 
         self.root = tk.Tk()
         self.root.title("Tooltip Annotation Editor")
         self.root.geometry("1600x960")
         self.root.minsize(1100, 700)
 
+        # Canvas text items default to TkDefaultFont; scale a copy of it for the
+        # per-tool number so the label stays readable over the video frame.
+        # Tk encodes a size in pixels as a negative number, and multiplying
+        # keeps that convention intact.
+        canvas_font = tkfont.nametofont("TkDefaultFont")
+        self.annotation_label_font = tkfont.Font(
+            family=canvas_font.cget("family"),
+            size=canvas_font.cget("size") * ANNOTATION_LABEL_FONT_SCALE,
+            weight=canvas_font.cget("weight"),
+        )
+
+        self.dataset_var = tk.StringVar(value=self.current_dataset)
         self.split_var = tk.StringVar(value=SPLIT_NAMES[0])
+        self.auto_save_var = tk.BooleanVar(value=args.auto_save)
         self.show_segmentation_var = tk.BooleanVar(value=True)
         self.show_annotation_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Ready")
@@ -58,6 +122,9 @@ class AnnotationEditor:
         self.current_image_rgb: np.ndarray | None = None
         self.current_segmentation_mask: np.ndarray | None = None
         self.current_annotations: list[dict[str, dict[str, int]]] = []
+        self.current_source = SOURCE_AUTO
+        self.manual_stems: set[str] = set()
+        self.list_index_width = 1
         self.image_width = 0
         self.image_height = 0
 
@@ -80,9 +147,44 @@ class AnnotationEditor:
         self._load_split(self.current_split)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _configure_button_styles(self) -> None:
+        """Colour-code the toolbar buttons.
+
+        Each colour gets its own ttk style because ttk buttons take no direct
+        foreground option. The disabled state is mapped back to grey so a
+        coloured button still reads as unavailable.
+        """
+        style = ttk.Style()
+        for style_name, foreground in BUTTON_STYLES.items():
+            style.configure(style_name, foreground=foreground)
+            style.map(style_name, foreground=[("disabled", BUTTON_DISABLED_FOREGROUND)])
+
+        style.configure(
+            ADD_ACTIVE_STYLE,
+            foreground=BUTTON_STYLES["Add.TButton"],
+            background=ADD_ACTIVE_BACKGROUND,
+        )
+        style.map(
+            ADD_ACTIVE_STYLE,
+            foreground=[("disabled", BUTTON_DISABLED_FOREGROUND)],
+            background=[("active", ADD_ACTIVE_HOVER_BACKGROUND)],
+        )
+
     def _build_ui(self) -> None:
+        self._configure_button_styles()
+
         top_bar = ttk.Frame(self.root, padding=(10, 10, 10, 6))
         top_bar.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(top_bar, text="Dataset").pack(side=tk.LEFT)
+        self.dataset_combobox = ttk.Combobox(
+            top_bar,
+            textvariable=self.dataset_var,
+            values=list_datasets(),
+            state=tk.DISABLED if self.dataset_locked else "readonly",
+            width=14,
+        )
+        self.dataset_combobox.pack(side=tk.LEFT, padx=(8, 18))
 
         ttk.Label(top_bar, text="Split").pack(side=tk.LEFT)
         self.split_combobox = ttk.Combobox(
@@ -94,17 +196,39 @@ class AnnotationEditor:
         )
         self.split_combobox.pack(side=tk.LEFT, padx=(8, 18))
 
-        self.add_button = ttk.Button(top_bar, text="Add Tool", command=self._enter_add_mode)
+        self.add_button = ttk.Button(
+            top_bar, text=ADD_BUTTON_LABEL, style="Add.TButton", command=self._enter_add_mode
+        )
         self.add_button.pack(side=tk.LEFT)
 
-        self.delete_button = ttk.Button(top_bar, text="Delete Tool", command=self._delete_selected)
+        self.delete_button = ttk.Button(
+            top_bar, text=DELETE_BUTTON_LABEL, style="Delete.TButton", command=self._delete_selected
+        )
         self.delete_button.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.reload_button = ttk.Button(top_bar, text="Reload", command=self._reload_current_annotation)
+        self.save_button = ttk.Button(
+            top_bar, text=SAVE_BUTTON_LABEL, style="Save.TButton", command=self._save_current_annotation
+        )
+        self.save_button.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.reload_button = ttk.Button(
+            top_bar, text=RELOAD_BUTTON_LABEL, style="Reload.TButton",
+            command=self._reload_current_annotation
+        )
         self.reload_button.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.save_button = ttk.Button(top_bar, text="Save", command=self._save_current_annotation)
-        self.save_button.pack(side=tk.LEFT, padx=(18, 0))
+        self.revert_button = ttk.Button(
+            top_bar, text=REVERT_BUTTON_LABEL, style="Revert.TButton", command=self._revert_to_auto
+        )
+        self.revert_button.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.auto_save_checkbutton = ttk.Checkbutton(
+            top_bar,
+            text="Auto Save",
+            variable=self.auto_save_var,
+            command=self._on_auto_save_toggled,
+        )
+        self.auto_save_checkbutton.pack(side=tk.LEFT, padx=(12, 0))
 
         self.show_segmentation_checkbutton = ttk.Checkbutton(
             top_bar,
@@ -122,8 +246,6 @@ class AnnotationEditor:
         )
         self.show_annotation_checkbutton.pack(side=tk.LEFT, padx=(12, 0))
 
-        ttk.Label(top_bar, textvariable=self.status_var).pack(side=tk.RIGHT)
-
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
@@ -135,7 +257,7 @@ class AnnotationEditor:
         list_frame = ttk.Frame(left_panel)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.image_listbox = tk.Listbox(list_frame, width=38, exportselection=False)
+        self.image_listbox = tk.Listbox(list_frame, width=46, exportselection=False)
         self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.image_listbox.yview)
@@ -148,40 +270,61 @@ class AnnotationEditor:
         self.canvas = tk.Canvas(right_panel, background="#101417", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
+        # The toolbar carries every shortcut in its button labels now, so the
+        # hint line only covers the mouse gestures, leaving the bottom bar wide
+        # enough for the status readout that used to crowd the toolbar.
         instruction = (
-            "Drag bbox interior to move. Drag corner handles to resize. Drag red tip handle to move the tip. "
-            "A or Insert adds, D or Delete removes, R reloads, S or Ctrl+S saves, and arrow keys move between images."
+            "Drag bbox interior to move. Drag corner handles to resize. "
+            "Drag red tip handle to move the tip. Arrow keys move between images."
         )
-        ttk.Label(self.root, text=instruction, padding=(10, 0, 10, 10)).pack(side=tk.BOTTOM, fill=tk.X)
+        bottom_bar = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Label(bottom_bar, text=instruction).pack(side=tk.LEFT)
+        ttk.Label(bottom_bar, textvariable=self.status_var).pack(side=tk.RIGHT)
 
         self._update_buttons()
 
     def _bind_events(self) -> None:
+        self.dataset_combobox.bind("<<ComboboxSelected>>", self._on_dataset_changed)
         self.split_combobox.bind("<<ComboboxSelected>>", self._on_split_changed)
         self.image_listbox.bind("<<ListboxSelect>>", self._on_image_selected)
+
+        # The Listbox class binds <<PrevLine>>/<<NextLine>>, which Tk maps to
+        # Up/Down. Those move the selection themselves and fire
+        # <<ListboxSelect>>, and the toplevel binding below would then move it a
+        # second time. Widget bindings run before class and toplevel ones, so
+        # handling Up/Down here and returning "break" keeps it to one step.
+        # Left/Right need no such guard: their class bindings only scroll
+        # horizontally.
+        self.image_listbox.bind("<Up>", self._on_previous_image_shortcut)
+        self.image_listbox.bind("<Down>", self._on_next_image_shortcut)
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
         self.canvas.bind("<Configure>", self._on_canvas_resized)
-        self.root.bind("<KeyPress-a>", self._on_add_shortcut)
-        self.root.bind("<KeyPress-A>", self._on_add_shortcut)
+        # One shortcut per action, each printed on its button. Bare letter keys
+        # are deliberately not bound: a stray "d" must not delete a tool.
         self.root.bind("<Insert>", self._on_add_shortcut)
-        self.root.bind("<KeyPress-d>", self._on_delete_shortcut)
-        self.root.bind("<KeyPress-D>", self._on_delete_shortcut)
+        self.root.bind("<Delete>", self._on_delete_shortcut)
         self.root.bind("<Control-s>", self._on_save_shortcut)
         self.root.bind("<Control-S>", self._on_save_shortcut)
-        self.root.bind("<KeyPress-s>", self._on_save_shortcut)
-        self.root.bind("<KeyPress-S>", self._on_save_shortcut)
-        self.root.bind("<KeyPress-r>", self._on_reload_shortcut)
-        self.root.bind("<KeyPress-R>", self._on_reload_shortcut)
-        self.root.bind("<Delete>", self._on_delete_shortcut)
         self.root.bind("<Up>", self._on_previous_image_shortcut)
         self.root.bind("<Left>", self._on_previous_image_shortcut)
         self.root.bind("<Down>", self._on_next_image_shortcut)
         self.root.bind("<Right>", self._on_next_image_shortcut)
+        self.root.bind("<F2>", self._on_save_shortcut)
+        self.root.bind("<F3>", self._on_reload_shortcut)
+        self.root.bind("<F4>", self._on_revert_shortcut)
         self.root.bind("<Escape>", self._on_escape)
 
     def _ensure_output_dirs(self) -> None:
+        """Create the generated-annotation directories only.
+
+        annotation-manual/ is left untouched: it is created on the first save
+        instead. Pre-creating it would leave empty directories behind for
+        datasets nobody has corrected, and would block `git clone` for anyone
+        keeping their hand labels in a repository of their own at that path.
+        """
         for split_name in SPLIT_NAMES:
             (self.annotation_root / split_name).mkdir(parents=True, exist_ok=True)
 
@@ -189,6 +332,29 @@ class AnnotationEditor:
         if not self._confirm_leave_current_image():
             return
         self.root.destroy()
+
+    def _on_dataset_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        requested_dataset = self.dataset_var.get()
+        if requested_dataset == self.current_dataset:
+            return
+        if not self._confirm_leave_current_image():
+            self.dataset_var.set(self.current_dataset)
+            return
+        self._switch_dataset(requested_dataset)
+
+    def _switch_dataset(self, dataset_name: str) -> None:
+        """Repoint every root at another dataset and reload the current split."""
+        self.current_dataset = dataset_name
+        self.dataset_var.set(dataset_name)
+        self.images_root = images_dir(dataset_name)
+        self.segmentation_root = segmentation_dir(dataset_name)
+        self.annotation_root = annotation_dir(dataset_name)
+        self.manual_root = annotation_manual_dir(dataset_name)
+        # Only materialise output directories for a dataset that actually has
+        # frames, so selecting a source-only entry does not litter data/.
+        if self.images_root.is_dir():
+            self._ensure_output_dirs()
+        self._load_split(self.current_split)
 
     def _on_split_changed(self, _event: tk.Event[tk.Misc]) -> None:
         requested_split = self.split_var.get()
@@ -216,6 +382,13 @@ class AnnotationEditor:
     def _on_canvas_resized(self, _event: tk.Event[tk.Misc]) -> None:
         self._render_scene()
 
+    def _on_auto_save_toggled(self) -> None:
+        """Flush the pending edit as soon as auto save is switched on."""
+        if self.auto_save_var.get() and self.dirty:
+            self._save_current_annotation()
+            return
+        self._update_status()
+
     def _on_add_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._enter_add_mode()
         return "break"
@@ -230,6 +403,10 @@ class AnnotationEditor:
 
     def _on_reload_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._reload_current_annotation()
+        return "break"
+
+    def _on_revert_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
+        self._revert_to_auto()
         return "break"
 
     def _on_previous_image_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
@@ -260,16 +437,23 @@ class AnnotationEditor:
         self.current_image_rgb = None
         self.current_segmentation_mask = None
         self.current_annotations = []
+        self.current_source = SOURCE_AUTO
         self.selected_annotation_index = None
         self.preview_box = None
         self.drag_state = None
         self.mode = "select"
         self.dirty = False
+        self.manual_stems = self._list_manual_stems(split_name)
+        # Pad the running number to the digit count of the split's frame total,
+        # so [00001] in a 71,032-frame split and [1] in a 3-frame one.
+        self.list_index_width = len(str(len(self.image_paths))) or 1
 
         self.suppress_listbox_event = True
         self.image_listbox.delete(0, tk.END)
-        for image_path in self.image_paths:
-            self.image_listbox.insert(tk.END, image_path.name)
+        for index, image_path in enumerate(self.image_paths):
+            self.image_listbox.insert(tk.END, self._listbox_label(index, image_path))
+            if image_path.stem in self.manual_stems:
+                self._apply_listbox_style(index, True)
         self.suppress_listbox_event = False
 
         if self.image_paths:
@@ -289,6 +473,11 @@ class AnnotationEditor:
         self.image_height, self.image_width = self.current_image_rgb.shape[:2]
         self.current_segmentation_mask = self._load_segmentation_mask(self.current_image_path)
         self.current_annotations = self._load_annotation(self.current_image_path)
+        self.current_source = (
+            SOURCE_MANUAL
+            if self.current_image_path.stem in self.manual_stems
+            else SOURCE_AUTO
+        )
         self._update_images_label()
         self.selected_annotation_index = 0 if self.current_annotations else None
         self.preview_box = None
@@ -358,30 +547,153 @@ class AnnotationEditor:
         return normalized
 
     def _save_current_annotation(self) -> None:
+        """Store the edit in annotation-manual/, then mirror it into annotation/.
+
+        annotation-manual/ is the original that `generate_annotation` must never
+        overwrite; annotation/ stays the single complete tree every consumer
+        (training, baselines, dataset browser) already reads.
+        """
         if self.current_image_path is None:
             return
 
-        payload = {
-            "image": self.current_image_path.name,
-            "width": int(self.image_width),
-            "height": int(self.image_height),
-            "annotations": [
+        payload = build_payload(
+            image_name=self.current_image_path.name,
+            width=self.image_width,
+            height=self.image_height,
+            annotations=[
                 {
                     "bbox": annotation["bbox"],
                     "tip": annotation["tip"],
                 }
                 for annotation in self.current_annotations
             ],
-        }
+            source=SOURCE_MANUAL,
+        )
+
+        manual_path = self._manual_path_for_image(self.current_image_path)
+        manual_path.parent.mkdir(parents=True, exist_ok=True)
+        write_annotation(manual_path, payload)
+
         annotation_path = self._annotation_path_for_image(self.current_image_path)
         annotation_path.parent.mkdir(parents=True, exist_ok=True)
-        annotation_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        shutil.copyfile(manual_path, annotation_path)
+
+        self.current_source = SOURCE_MANUAL
+        self._set_current_manual_flag(True)
         self.dirty = False
         self._update_buttons()
-        self._update_status("Saved annotation.")
+        self._update_status("Saved manual annotation.")
+
+    def _revert_to_auto(self) -> None:
+        """Drop the manual edit for this frame and recompute it from the mask."""
+        if self.current_image_path is None:
+            return
+        if self.current_source != SOURCE_MANUAL:
+            self._update_status("This annotation is already automatic.")
+            return
+        if self.current_segmentation_mask is None:
+            messagebox.showwarning(
+                "Revert to Auto",
+                "No segmentation mask for this frame, so the automatic "
+                "annotation cannot be recomputed.",
+            )
+            return
+        if not messagebox.askyesno(
+            "Revert to Auto",
+            "Discard the manual annotation for this frame and recompute it "
+            "from the segmentation mask?",
+            default=messagebox.NO,
+        ):
+            return
+
+        payload = build_payload(
+            image_name=self.current_image_path.name,
+            width=self.image_width,
+            height=self.image_height,
+            annotations=extract_annotations(self.current_segmentation_mask),
+            source=SOURCE_AUTO,
+        )
+
+        manual_path = self._manual_path_for_image(self.current_image_path)
+        manual_path.unlink(missing_ok=True)
+        annotation_path = self._annotation_path_for_image(self.current_image_path)
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
+        write_annotation(annotation_path, payload)
+
+        self.current_source = SOURCE_AUTO
+        self._set_current_manual_flag(False)
+        self.current_annotations = self._load_annotation(self.current_image_path)
+        self.selected_annotation_index = 0 if self.current_annotations else None
+        self.preview_box = None
+        self.drag_state = None
+        self.mode = "select"
+        self.dirty = False
+        self._update_buttons()
+        self._update_status("Reverted to the automatic annotation.")
+        self._render_scene()
 
     def _annotation_path_for_image(self, image_path: Path) -> Path:
-        return self.annotation_root / self.current_split / f"{image_path.stem}.json"
+        return self.annotation_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
+
+    def _manual_path_for_image(self, image_path: Path) -> Path:
+        return self.manual_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
+
+    def _list_manual_stems(self, split_name: str) -> set[str]:
+        manual_dir = self.manual_root / split_name
+        if not manual_dir.is_dir():
+            return set()
+        return {path.stem for path in manual_dir.glob(f"*{ANNOTATION_SUFFIX}")}
+
+    def _listbox_label(self, index: int, image_path: Path) -> str:
+        marker = "* " if image_path.stem in self.manual_stems else "  "
+        number = f"{index + 1:0{self.list_index_width}d}"
+        return f"{marker}[{number}] {image_path.name}"
+
+    def _apply_listbox_style(self, index: int, is_manual: bool) -> None:
+        """Paint one image-list row according to its provenance.
+
+        A row keeps its default colours unless it is manually corrected, so the
+        highlight reads as an exception rather than as theming.
+        """
+        if is_manual:
+            self.image_listbox.itemconfig(
+                index,
+                background=MANUAL_ITEM_BACKGROUND,
+                foreground=MANUAL_ITEM_FOREGROUND,
+                selectbackground=MANUAL_ITEM_SELECT_BACKGROUND,
+                selectforeground=MANUAL_ITEM_SELECT_FOREGROUND,
+            )
+        else:
+            self.image_listbox.itemconfig(
+                index,
+                background="",
+                foreground="",
+                selectbackground="",
+                selectforeground="",
+            )
+
+    def _set_current_manual_flag(self, is_manual: bool) -> None:
+        """Update the `*` marker of the current frame in the image list."""
+        if self.current_image_path is None or self.current_index is None:
+            return
+
+        if is_manual:
+            self.manual_stems.add(self.current_image_path.stem)
+        else:
+            self.manual_stems.discard(self.current_image_path.stem)
+
+        selected = self.current_index in self.image_listbox.curselection()
+        self.suppress_listbox_event = True
+        self.image_listbox.delete(self.current_index)
+        self.image_listbox.insert(
+            self.current_index,
+            self._listbox_label(self.current_index, self.current_image_path),
+        )
+        self._apply_listbox_style(self.current_index, is_manual)
+        if selected:
+            self.image_listbox.selection_set(self.current_index)
+            self.image_listbox.activate(self.current_index)
+        self.suppress_listbox_event = False
 
     def _render_scene(self) -> None:
         self.canvas.delete("all")
@@ -460,7 +772,14 @@ class AnnotationEditor:
         width = 3 if is_selected else 2
 
         self.canvas.create_rectangle(cx1, cy1, cx2, cy2, outline=outline, width=width)
-        self.canvas.create_text(cx1 + 6, cy1 + 6, text=str(index + 1), fill=outline, anchor=tk.NW)
+        self.canvas.create_text(
+            cx1 + 6,
+            cy1 + 6,
+            text=str(index + 1),
+            fill=outline,
+            anchor=tk.NW,
+            font=self.annotation_label_font,
+        )
 
         if is_selected:
             for handle_x, handle_y in ((cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)):
@@ -729,39 +1048,69 @@ class AnnotationEditor:
         self.drag_state = None
 
     def _hit_test(self, image_x: float, image_y: float) -> dict[str, object] | None:
+        """Resolve a click to a tip handle, a resize handle, or a bbox.
+
+        Handles are tested before box interiors, and the smallest box wins among
+        the ones under the cursor, so a tool nested inside a larger one stays
+        reachable instead of being swallowed by it.
+        """
         threshold = max(8.0 / self.canvas_scale, 3.0)
         tip_threshold_sq = (threshold * 1.5) ** 2
 
-        ordered_indices: list[int] = []
-        if self.selected_annotation_index is not None:
-            ordered_indices.append(self.selected_annotation_index)
-        ordered_indices.extend(i for i in range(len(self.current_annotations)) if i not in ordered_indices)
-
-        for index in ordered_indices:
-            annotation = self.current_annotations[index]
-            bbox = annotation["bbox"]
+        # Tips first: a tip may sit inside any number of boxes and must not be
+        # shadowed by them. Nearest tip wins, the selected one breaking ties.
+        tip_hit: tuple[tuple[float, bool], int] | None = None
+        for index, annotation in enumerate(self.current_annotations):
             tip = annotation["tip"]
-            if (tip["x"] - image_x) ** 2 + (tip["y"] - image_y) ** 2 <= tip_threshold_sq:
-                return {"index": index, "kind": "tip"}
+            distance_sq = (tip["x"] - image_x) ** 2 + (tip["y"] - image_y) ** 2
+            if distance_sq > tip_threshold_sq:
+                continue
+            key = (distance_sq, index != self.selected_annotation_index)
+            if tip_hit is None or key < tip_hit[0]:
+                tip_hit = (key, index)
+        if tip_hit is not None:
+            return {"index": tip_hit[1], "kind": "tip"}
 
+        # Resize handles exist only on the selected box.
+        if self.selected_annotation_index is not None:
+            bbox = self.current_annotations[self.selected_annotation_index]["bbox"]
             x1 = bbox["x"]
             y1 = bbox["y"]
             x2 = bbox["x"] + bbox["width"]
             y2 = bbox["y"] + bbox["height"]
+            corners = {
+                "nw": (x1, y1),
+                "ne": (x2, y1),
+                "sw": (x1, y2),
+                "se": (x2, y2),
+            }
+            for corner_name, (corner_x, corner_y) in corners.items():
+                if abs(corner_x - image_x) <= threshold and abs(corner_y - image_y) <= threshold:
+                    return {
+                        "index": self.selected_annotation_index,
+                        "kind": "resize",
+                        "corner": corner_name,
+                    }
 
-            if index == self.selected_annotation_index:
-                corners = {
-                    "nw": (x1, y1),
-                    "ne": (x2, y1),
-                    "sw": (x1, y2),
-                    "se": (x2, y2),
-                }
-                for corner_name, (corner_x, corner_y) in corners.items():
-                    if abs(corner_x - image_x) <= threshold and abs(corner_y - image_y) <= threshold:
-                        return {"index": index, "kind": "resize", "corner": corner_name}
-
-            if x1 <= image_x <= x2 and y1 <= image_y <= y2:
-                return {"index": index, "kind": "move"}
+        # Interiors last, smallest area first. Equal areas keep the current
+        # selection so repeated clicks on the same spot do not toggle.
+        box_hit: tuple[tuple[int, bool], int] | None = None
+        for index, annotation in enumerate(self.current_annotations):
+            bbox = annotation["bbox"]
+            x1 = bbox["x"]
+            y1 = bbox["y"]
+            x2 = bbox["x"] + bbox["width"]
+            y2 = bbox["y"] + bbox["height"]
+            if not (x1 <= image_x <= x2 and y1 <= image_y <= y2):
+                continue
+            key = (
+                bbox["width"] * bbox["height"],
+                index != self.selected_annotation_index,
+            )
+            if box_hit is None or key < box_hit[0]:
+                box_hit = (key, index)
+        if box_hit is not None:
+            return {"index": box_hit[1], "kind": "move"}
 
         return None
 
@@ -775,7 +1124,14 @@ class AnnotationEditor:
     def _update_buttons(self) -> None:
         self.save_button.configure(state=tk.NORMAL if self.dirty else tk.DISABLED)
         self.delete_button.configure(state=tk.NORMAL if self.selected_annotation_index is not None else tk.DISABLED)
-        self.add_button.configure(text="Adding... (Esc to cancel)" if self.mode == "add" else "Add Tool")
+        adding = self.mode == "add"
+        self.add_button.configure(
+            text=ADD_BUTTON_ACTIVE_LABEL if adding else ADD_BUTTON_LABEL,
+            style=ADD_ACTIVE_STYLE if adding else "Add.TButton",
+        )
+        self.revert_button.configure(
+            state=tk.NORMAL if self.current_source == SOURCE_MANUAL else tk.DISABLED
+        )
 
     def _update_images_label(self) -> None:
         total_count = len(self.image_paths)
@@ -793,12 +1149,19 @@ class AnnotationEditor:
         dirty_text = "modified" if self.dirty else "saved"
         mode_text = "add" if self.mode == "add" else "select"
         self.status_var.set(
-            f"{self.current_split} | {filename} | tools={tool_count} | selected={selected} | {dirty_text} | mode={mode_text}"
+            f"{self.current_split} | {filename} | {self.current_source} | tools={tool_count} | "
+            f"selected={selected} | {dirty_text} | mode={mode_text}"
         )
 
     def _confirm_leave_current_image(self) -> bool:
         if not self.dirty:
             return True
+
+        # Auto save turns the prompt into a save, which is the whole point of
+        # the option: moving between frames must not stop to ask.
+        if self.auto_save_var.get():
+            self._save_current_annotation()
+            return not self.dirty
 
         response = messagebox.askyesnocancel(
             "Unsaved changes",
@@ -878,7 +1241,10 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Dataset name, e.g. 'erop' or 'cholec80'. Used to resolve default "
-            "--images/--segmentation/--annotation when not given explicitly."
+            "--images/--segmentation/--annotation/--manual when not given "
+            "explicitly. Defaults to the first dataset found under "
+            "data/dataset-src or data/dataset; the Dataset selector in the "
+            "toolbar switches at runtime."
         ),
     )
     parser.add_argument(
@@ -898,6 +1264,26 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Root directory containing train/val/test annotation JSON files. Defaults to data/dataset/<dataset>/annotation.",
+    )
+    parser.add_argument(
+        "--manual",
+        type=Path,
+        default=None,
+        help=(
+            "Root directory where hand-corrected annotation JSON files are "
+            "kept. generate_annotation.py never overwrites these. Defaults to "
+            "data/dataset/<dataset>/annotation-manual."
+        ),
+    )
+    parser.add_argument(
+        "--auto-save",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Save pending changes when moving to another image instead of "
+            "asking. On by default; pass --no-auto-save to be asked every time. "
+            "Can be toggled in the toolbar either way."
+        ),
     )
     return parser.parse_args()
 
@@ -936,9 +1322,28 @@ def validate_args(args: argparse.Namespace) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    # Switching datasets in the GUI recomputes every root from the dataset name,
+    # which would silently drop explicitly given paths. Pin the selector in that
+    # case instead.
+    args.dataset_locked = any(
+        path is not None
+        for path in (args.images, args.segmentation, args.annotation, args.manual)
+    )
+
+    if args.dataset is None and not args.dataset_locked:
+        datasets = list_datasets()
+        if not datasets:
+            raise SystemExit(
+                "No datasets found under data/dataset-src or data/dataset. "
+                "Pass --dataset or the explicit path options."
+            )
+        args.dataset = datasets[0]
+
     args.images = resolve_path(args.images, args.dataset, images_dir, "--images")
     args.segmentation = resolve_path(args.segmentation, args.dataset, segmentation_dir, "--segmentation")
     args.annotation = resolve_path(args.annotation, args.dataset, annotation_dir, "--annotation")
+    args.manual = resolve_path(args.manual, args.dataset, annotation_manual_dir, "--manual")
     validate_args(args)
     editor = AnnotationEditor(args)
     editor.run()

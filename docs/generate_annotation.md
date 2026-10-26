@@ -4,6 +4,8 @@
 
 `--dataset <name>` 옵션을 주면 기본 입력은 `data/dataset/<name>/segmentation`, 기본 출력은 `data/dataset/<name>/annotation`이며, 입력과 출력 모두 `train`, `val`, `test` 세 분할 구조를 그대로 따른다.
 
+사람이 `annotation_editor.py`로 보정한 레이블은 `data/dataset/<name>/annotation-manual`에 따로 보관되며, 이 스크립트는 그 디렉터리를 **읽기만 한다**. 보정본이 있는 프레임은 마스크를 다시 분석하지 않고 보정본을 그대로 출력에 복사하므로, `--overwrite`로 전체를 재생성해도 수동 작업이 사라지지 않는다.
+
 ## 사용자 문서
 
 ### 목적
@@ -20,6 +22,28 @@ segmentation 단계에서 생성된 binary mask로부터 학습용 레이블을 
 3. `scripts/annotation_editor.py --dataset <name>`로 생성된 annotation 수동 보정
 
 즉, 이 스크립트의 출력은 완성된 정답이 아니라 **수동 보정의 출발점이 되는 초안 레이블**이다.
+
+### 자동 생성본과 수동 보정본의 분리
+
+이 스크립트가 다루는 디렉터리는 두 개이고, 역할이 다르다.
+
+| 디렉터리            | 이 스크립트의 역할 | 내용                                                | 재생성 |
+| ------------------- | ------------------ | --------------------------------------------------- | ------ |
+| `annotation-manual` | 읽기 전용          | 사람이 보정한 프레임만                              | 불가   |
+| `annotation`        | 쓰기 (생성물)      | 전체 프레임 = 자동 생성 결과에 수동 보정분을 덮어씀 | 가능   |
+
+프레임 단위 우선순위는 단순하다.
+
+1. `annotation-manual/{split}/{stem}.json`이 있으면 그 파일을 `annotation/{split}/{stem}.json`으로 복사한다. 마스크는 읽지 않는다.
+2. 없으면 마스크에서 bbox/tip을 계산해 저장한다. (기존 동작)
+
+이 때문에 다음이 성립한다.
+
+- `--overwrite`로 전체를 재생성해도 수동 보정분은 유지된다.
+- `annotation` 디렉터리를 통째로 삭제해도 보정 내용은 `annotation-manual`에서 복원된다.
+- `annotation` 쪽 파일을 직접 편집하면 다음 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation_editor.py`로 해야 한다.
+
+학습·평가 코드는 기존과 동일하게 `annotation` 하나만 읽는다. 어노테이션을 소비하는 쪽은 아무것도 바꿀 필요가 없다.
 
 ### 실행 전 요구 사항
 
@@ -54,6 +78,7 @@ uv run python -m scripts.generate_annotation --dataset erop
 
 - 입력 디렉터리: `data/dataset/<dataset>/segmentation`
 - 출력 디렉터리: `data/dataset/<dataset>/annotation`
+- 수동 보정 디렉터리: `data/dataset/<dataset>/annotation-manual`
 - 덮어쓰기: 비활성화 (기존 JSON은 건너뜀)
 
 ### CLI 옵션
@@ -64,8 +89,10 @@ uv run python -m scripts.generate_annotation --dataset erop
   - `train/val/test` segmentation mask가 들어 있는 루트 디렉터리. 기본값은 `data/dataset/<dataset>/segmentation`. 명시하면 `--dataset` 기본값보다 항상 우선한다.
 - `--output`
   - `train/val/test` annotation JSON을 저장할 루트 디렉터리. 기본값은 `data/dataset/<dataset>/annotation`. 명시하면 `--dataset` 기본값보다 항상 우선한다.
+- `--manual`
+  - 수동 보정 JSON이 들어 있는 루트 디렉터리. 기본값은 `data/dataset/<dataset>/annotation-manual`. 이 스크립트는 여기에 쓰지 않는다. 디렉터리가 없으면 보정본이 하나도 없는 것으로 보고 조용히 넘어간다.
 - `--overwrite`
-  - 지정하면 기존 JSON 파일을 건너뛰지 않고 다시 생성해 덮어쓴다. 지정하지 않으면 이미 존재하는 JSON은 건너뛴다.
+  - 지정하면 기존 **자동 생성** JSON 파일을 건너뛰지 않고 다시 생성해 덮어쓴다. 지정하지 않으면 이미 존재하는 JSON은 건너뛴다. 어느 쪽이든 수동 보정분은 보존된다.
 
 ### 실행 예시
 
@@ -81,10 +108,17 @@ python -m scripts.generate_annotation --dataset cholec80
 python -m scripts.generate_annotation --input ./data/dataset/erop/segmentation --output ./data/dataset_v2/annotation
 ```
 
-기존 JSON을 모두 다시 생성하는 예시:
+자동 생성분만 모두 다시 생성하는 예시(수동 보정분은 유지):
 
 ```bash
 python -m scripts.generate_annotation --dataset cholec80 --overwrite
+```
+
+수동 보정분을 무시하고 순수한 자동 생성 결과만 얻는 예시(디버깅 용도. `--manual`을 빈 디렉터리로 돌린다):
+
+```bash
+python -m scripts.generate_annotation --dataset cholec80 --overwrite \
+  --manual ./temp/empty --output ./temp/annotation-auto-only
 ```
 
 ### 입력 대상 파일
@@ -108,7 +142,11 @@ python -m scripts.generate_annotation --dataset cholec80 --overwrite
 
 ```text
 ./data/dataset/<dataset>/
-└── annotation/
+├── annotation/              # 이 스크립트가 쓴다
+│   ├── train/
+│   ├── val/
+│   └── test/
+└── annotation-manual/       # 이 스크립트는 읽기만 한다
     ├── train/
     ├── val/
     └── test/
@@ -131,6 +169,7 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
   "image": "sample01_00000030.png",
   "width": 736,
   "height": 480,
+  "source": "auto",
   "annotations": [
     {
       "bbox": {
@@ -152,10 +191,14 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
 
 - `image`: 원본 mask 파일 이름 (확장자 포함)
 - `width`, `height`: mask 이미지의 가로/세로 크기 (픽셀)
+- `source`: 레이블의 출처. 이 스크립트가 계산한 파일은 `auto`, `annotation_editor.py`가 저장한 파일은 `manual`이다
+- `edited_at`: `source`가 `manual`인 파일에만 있는 수정 시각 (ISO 8601, 로컬 타임존)
 - `annotations`: mask에서 찾은 도구 영역 목록
   - `bbox.x`, `bbox.y`: bounding box의 좌상단 좌표
   - `bbox.width`, `bbox.height`: bounding box의 너비/높이
   - `tip.x`, `tip.y`: 추정된 도구 끝점 좌표
+
+`source` 필드가 도입되기 전에 생성된 파일에는 이 키가 없으며, 그 경우는 `auto`로 간주한다. 학습·평가 코드는 `annotations`만 읽으므로 이 메타데이터 필드가 늘어도 영향을 받지 않는다.
 
 좌표는 모두 정수로 저장되며, JSON은 `indent=2`와 `sort_keys=True`로 직렬화되어 키가 알파벳 순으로 정렬된다. 도구 영역이 하나도 없는 mask는 `annotations`가 빈 배열인 JSON으로 저장된다.
 
@@ -164,12 +207,13 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
 1. CLI 인자를 파싱한다.
 2. OpenCV/numpy import 여부와 입력 경로의 유효성을 검사한다.
 3. 출력 디렉터리 아래 `train`, `val`, `test` 폴더를 생성한다.
-4. `--overwrite`가 아니고 모든 출력 JSON이 이미 존재하면, 아무 작업도 하지 않고 `All annotation files already exist. Nothing to do.`를 출력한 뒤 종료한다.
+4. `--overwrite`가 아니고 모든 출력 JSON이 이미 존재하며 수동 보정분도 모두 반영된 상태면, 아무 작업도 하지 않고 `All annotation files already exist. Nothing to do.`를 출력한 뒤 종료한다.
 5. split별로 mask 파일 목록을 정렬해 수집한다.
-6. 각 mask를 읽어 binary mask로 변환한다.
-7. mask에서 외곽 contour를 찾고, contour마다 bounding box와 tip 좌표를 계산한다.
-8. 결과를 JSON으로 직렬화해 split별 출력 폴더에 저장한다.
-9. 모든 split 처리가 끝나면 split별 저장/건너뜀 개수를 출력한다.
+6. 해당 프레임의 수동 보정본이 있으면 그것을 출력으로 복사하고 다음 프레임으로 넘어간다.
+7. 없으면 mask를 읽어 binary mask로 변환한다.
+8. mask에서 외곽 contour를 찾고, contour마다 bounding box와 tip 좌표를 계산한다.
+9. 결과를 JSON으로 직렬화해 split별 출력 폴더에 저장한다.
+10. 모든 split 처리가 끝나면 split별 저장/건너뜀/수동 보정 개수를 출력한다.
 
 ### tip 좌표 추정 방식
 
@@ -191,7 +235,11 @@ tip(끝점)은 다음 절차로 정한다.
 ### 종료 및 출력
 
 - 모든 출력이 이미 존재하고 `--overwrite`가 아니면 `All annotation files already exist. Nothing to do.`를 출력하고 종료 코드 `0`으로 끝난다.
-- 정상 완료 시 `Annotation generation complete.`와 split별 `saved`/`skipped` 개수를 출력하고 종료 코드 `0`을 반환한다.
+- 정상 완료 시 `Annotation generation complete.`와 split별 개수를 출력하고 종료 코드 `0`을 반환한다. 개수는 네 가지다.
+  - `saved`: mask에서 새로 계산해 저장한 자동 생성 파일 수
+  - `skipped`: 이미 존재해 건너뛴 자동 생성 파일 수
+  - `manual`: 수동 보정본이 있어 mask를 읽지 않은 프레임 수
+  - `restored`: 그 중 출력이 보정본과 달라 다시 복사한 파일 수. 평소에는 `0`이고, `--overwrite`를 줬거나 출력이 지워졌거나 손으로 변경된 경우에만 늘어난다
 - OpenCV/numpy import 실패, 잘못된 인자, 입력 경로 오류, split 폴더 누락, mask 읽기 실패 등은 예외로 중단된다.
 
 ### 문제 해결
@@ -228,22 +276,24 @@ tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation_edit
 
 기본 동작은 기존 JSON을 건너뛴다. 다시 생성하려면 `--overwrite`를 지정한다.
 
+#### `--overwrite`를 줬는데도 특정 프레임이 갱신되지 않는 경우
+
+그 프레임에 수동 보정본이 있는 경우다. `annotation-manual/{split}/{stem}.json`이 존재하면 mask를 다시 분석하지 않는다. 의도한 동작이며, 자동 생성 결과로 되돌리려면 `annotation_editor.py`에서 해당 프레임을 열고 `Revert to Auto`를 누른다.
+
+#### `annotation`을 직접 고쳤는데 다음 실행에서 되돌아간 경우
+
+수동 보정본이 있는 프레임의 출력은 매 실행마다 `annotation-manual`의 내용으로 맞춰진다(`restored` 개수로 보고된다). `annotation`은 생성물이므로 직접 편집하지 말고 `annotation_editor.py`를 사용한다.
+
 ## 개발 문서
 
 ### 파일 구조
 
 스크립트는 다음 함수들로 구성된다.
 
-- `parse_args()`
-  - CLI 인자(`--dataset`, `--input`, `--output`, `--overwrite`)를 정의하고 파싱한다.
-- `validate_args(args)`
-  - OpenCV/numpy 의존성, 입력 루트, split 디렉터리 존재 여부를 검증한다. `--dataset` 기반 기본 경로 해석은 `main()`에서 이 함수 호출 전에 끝난다.
-- `ensure_output_dirs(output_root)`
-  - 출력 루트 아래 `train`, `val`, `test` 디렉터리를 생성한다.
-- `_all_outputs_exist(input_root, output_root)`
-  - 모든 입력 mask에 대응하는 출력 JSON이 이미 존재하는지 검사한다.
-- `list_images(image_dir)`
-  - 디렉터리에서 지원 확장자의 파일을 정렬해 반환한다.
+bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 있고, 스크립트는 파일 탐색과 skip/overwrite/override 정책만 담당한다. `annotation_editor.py`의 "자동으로 되돌리기" 기능이 같은 계산 코드를 써야 하므로 모듈로 분리되어 있다.
+
+`tooltip/annotation.py`:
+
 - `load_binary_mask(mask_path)`
   - mask를 읽어 grayscale 변환 후 `127` 기준으로 이진화한다.
 - `contour_centroid(points)`
@@ -254,14 +304,33 @@ tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation_edit
   - 양 끝 극점을 구하고 이미지 중심에 가까운 점을 tip으로 선택한다.
 - `extract_annotations(mask)`
   - contour별 bbox/tip을 만들어 정렬된 annotation 리스트로 반환한다.
-- `build_annotation_payload(mask_path, mask)`
-  - 이미지 메타와 annotation 리스트를 합쳐 최종 payload를 만든다.
+- `build_payload(image_name, width, height, annotations, source)`
+  - 메타와 annotation 리스트를 합쳐 payload를 만든다. `source`가 `manual`이면 `edited_at`을 덧붙인다.
+- `build_auto_payload(mask_path, mask)`
+  - mask에서 annotation을 추출해 `source="auto"` payload를 만든다.
 - `write_annotation(output_path, payload)`
   - payload를 JSON으로 직렬화해 저장한다.
+- `annotation_source(payload)`
+  - payload의 출처를 반환한다. `source` 키가 없는 구버전 파일은 `auto`로 본다.
+
+`scripts/generate_annotation.py`:
+
+- `parse_args()`
+  - CLI 인자(`--dataset`, `--input`, `--output`, `--manual`, `--overwrite`)를 정의하고 파싱한다.
+- `validate_args(args)`
+  - OpenCV/numpy 의존성, 입력 루트, split 디렉터리 존재 여부를 검증한다. `--manual`은 존재할 경우에만 디렉터리인지 확인한다. `--dataset` 기반 기본 경로 해석은 `main()`에서 이 함수 호출 전에 끝난다.
+- `ensure_output_dirs(output_root)`
+  - 출력 루트 아래 `train`, `val`, `test` 디렉터리를 생성한다.
+- `_needs_materialize(manual_path, output_path)`
+  - 출력이 수동 보정본과 다른지(또는 없는지) 크기 비교 후 바이트 비교로 판정한다.
+- `_all_outputs_up_to_date(input_root, output_root, manual_root)`
+  - 모든 출력 JSON이 존재하고 수동 보정분도 모두 반영된 상태인지 검사한다.
+- `list_images(image_dir)`
+  - 디렉터리에서 지원 확장자의 파일을 정렬해 반환한다.
 - `process_split(...)`
-  - 한 split을 처리하고 `(saved, skipped)` 개수를 반환한다.
+  - 한 split을 처리하고 `saved`/`skipped`/`manual`/`restored` 개수를 반환한다.
 - `main()`
-  - `tooltip.dataset_paths.resolve_path()`로 `--input`/`--output`을 확정한 뒤 전체 파이프라인을 조합하고 종료 코드 `0`을 반환한다.
+  - `tooltip.dataset_paths.resolve_path()`로 `--input`/`--output`/`--manual`을 확정한 뒤 전체 파이프라인을 조합하고 종료 코드 `0`을 반환한다.
 
 ### 핵심 구현 세부 사항
 
@@ -325,14 +394,21 @@ return point_a if distance_a <= distance_b else point_b
 
 JSON 직렬화도 `sort_keys=True`라서 키 순서까지 결정적이다. 이로 인해 git diff나 재현성 측면에서 안정적이다.
 
-#### 6. skip / overwrite 정책
+#### 6. skip / overwrite / override 정책
 
-skip은 두 단계로 동작한다.
+프레임 단위 판정 순서는 다음과 같다.
 
-- 전역 단축 경로: `main()`은 `--overwrite`가 아닐 때 `_all_outputs_exist()`로 전체 출력이 이미 존재하면 즉시 종료한다.
-- 파일 단위: `process_split()`은 출력 JSON이 존재하고 `--overwrite`가 아니면 해당 파일만 건너뛴다.
+1. **수동 보정본 우선**: `annotation-manual/{split}/{stem}.json`이 있으면 `--overwrite` 여부와 무관하게 그 파일을 출력으로 복사하고 종료한다. 이미 같은 내용이면 복사도 생략한다.
+2. **skip**: 출력 JSON이 존재하고 `--overwrite`가 아니면 건너뛴다.
+3. **생성**: 그 외에는 mask에서 계산해 저장한다.
 
-`--overwrite`를 주면 두 검사 모두 무시되고 모든 JSON을 재생성한다.
+여기에 더해 전역 단축 경로가 있다. `main()`은 `--overwrite`가 아닐 때 `_all_outputs_up_to_date()`로 "모든 출력이 존재하고 수동 보정분도 모두 반영됨"을 확인하면 즉시 종료한다. 수동 보정본이 새로 생겼거나 바뀐 경우에는 이 검사가 실패하므로, `--overwrite` 없이 그냥 재실행하는 것만으로 보정분이 출력에 반영된다.
+
+수동 보정본 조회는 split 디렉터리가 존재할 때만 수행하므로, 보정을 한 번도 하지 않은 데이터셋에서는 추가 비용이 사실상 없다.
+
+#### 7. 복사 기반 반영(materialize)
+
+수동 보정본은 파싱 후 재직렬화하지 않고 `shutil.copyfile()`로 바이트 단위 복사한다. 덕분에 출력 파일과 보정본이 항상 바이트 단위로 동일해지고, `_needs_materialize()`의 동일성 판정이 단순한 바이트 비교로 끝난다.
 
 ### 예외와 종료 방식
 
@@ -353,6 +429,8 @@ skip은 두 단계로 동작한다.
 - `RETR_EXTERNAL`만 사용하므로 겹치거나 중첩된 도구를 분리하지 못할 수 있다.
 - 출력 좌표가 정수로 고정되어 있어 서브픽셀 정밀도는 유지되지 않는다.
 - 로그 출력이 `print()`와 `tqdm`에 묶여 있어 구조화된 로그에는 적합하지 않다.
+- 수동 보정본은 프레임 단위로만 적용된다. 한 프레임 안의 도구 하나만 보정하고 나머지는 자동 생성 결과를 따라가게 할 수는 없다.
+- `annotation`과 `annotation-manual`에 보정 내용이 중복 저장된다. `annotation`은 언제든 재생성 가능한 생성물이라는 전제로 감수한 비용이다.
 
 ### 확장 권장 사항
 
@@ -368,11 +446,11 @@ skip은 두 단계로 동작한다.
 핵심 분석 함수들은 파일 시스템과 분리되어 있어 numpy mask 배열만 있으면 단독으로 사용할 수 있다.
 
 ```python
-import cv2
-from scripts.generate_annotation import extract_annotations, load_binary_mask
+from pathlib import Path
+from tooltip.annotation import extract_annotations, load_binary_mask
 
 mask = load_binary_mask(Path("./data/dataset/erop/segmentation/train/sample01_00000030.png"))
 annotations = extract_annotations(mask)
 ```
 
-`extract_annotations()`는 binary mask(numpy 배열)를 받아 annotation 리스트를 반환하므로, 파이프라인 외부에서도 bbox/tip 계산 로직만 따로 재사용하기 좋다.
+`extract_annotations()`는 binary mask(numpy 배열)를 받아 annotation 리스트를 반환하므로, 파이프라인 외부에서도 bbox/tip 계산 로직만 따로 재사용하기 좋다. 이 함수들은 `scripts/generate_annotation.py`가 아니라 공용 모듈 `tooltip/annotation.py`에 있다.
