@@ -43,7 +43,7 @@ else:
 
 SPLIT_NAMES = ("train", "val", "test")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-HANDLE_SIZE = 5
+HANDLE_SIZE = 7.5
 TIP_RADIUS = 6
 SEGMENTATION_ALPHA = 0.35
 MIN_BOX_SIZE = 4
@@ -73,8 +73,8 @@ ADD_ACTIVE_HOVER_BACKGROUND = "#ffd84d"
 BUTTON_DISABLED_FOREGROUND = "#9e9e9e"
 
 # Button labels carry their shortcut so the toolbar documents itself.
-ADD_BUTTON_LABEL = "Add Tool [INS]"
-ADD_BUTTON_ACTIVE_LABEL = "Adding... (Esc to cancel)"
+ADD_BUTTON_LABEL = "Add Tool [INS/Wheel]"
+ADD_BUTTON_ACTIVE_LABEL = "Adding... (Esc/Wheel to cancel)"
 DELETE_BUTTON_LABEL = "Delete Tool [DEL]"
 SAVE_BUTTON_LABEL = "Save [F2]"
 RELOAD_BUTTON_LABEL = "Reload [F3]"
@@ -274,8 +274,8 @@ class AnnotationEditor:
         # hint line only covers the mouse gestures, leaving the bottom bar wide
         # enough for the status readout that used to crowd the toolbar.
         instruction = (
-            "Drag bbox interior to move. Drag corner handles to resize. "
-            "Drag red tip handle to move the tip. Arrow keys move between images."
+            "Drag bbox interior to move. Drag corner/edge handles to resize. "
+            "Drag red tip handle to move the tip. Arrow keys or mouse wheel move between images."
         )
         bottom_bar = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
@@ -302,6 +302,16 @@ class AnnotationEditor:
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
         self.canvas.bind("<Configure>", self._on_canvas_resized)
+        # Wheel click on the image toggles add mode: it enters it like Insert
+        # and cancels it like Escape, so a new box can be started or abandoned
+        # without leaving the mouse. Button-2 is the wheel on Windows and X11.
+        self.canvas.bind("<ButtonPress-2>", self._on_canvas_wheel_click)
+        # Wheel scroll over the image steps through images: up is previous,
+        # down is next. Windows (and Tk 9 on X11) report <MouseWheel>; older
+        # Tk on X11 reports Button-4/5 instead.
+        self.canvas.bind("<MouseWheel>", self._on_canvas_wheel)
+        self.canvas.bind("<Button-4>", self._on_previous_image_shortcut)
+        self.canvas.bind("<Button-5>", self._on_next_image_shortcut)
         # One shortcut per action, each printed on its button. Bare letter keys
         # are deliberately not bound: a stray "d" must not delete a tool.
         self.root.bind("<Insert>", self._on_add_shortcut)
@@ -415,6 +425,18 @@ class AnnotationEditor:
 
     def _on_next_image_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._navigate_images(1)
+        return "break"
+
+    def _on_canvas_wheel_click(self, event: tk.Event[tk.Misc]) -> str:
+        if self.mode == "add":
+            return self._on_escape(event)
+        return self._on_add_shortcut(event)
+
+    def _on_canvas_wheel(self, event: tk.Event[tk.Misc]) -> str:
+        if event.delta > 0:
+            self._navigate_images(-1)
+        elif event.delta < 0:
+            self._navigate_images(1)
         return "break"
 
     def _on_escape(self, _event: tk.Event[tk.Misc]) -> str:
@@ -782,7 +804,13 @@ class AnnotationEditor:
         )
 
         if is_selected:
-            for handle_x, handle_y in ((cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2)):
+            mid_x = (cx1 + cx2) / 2
+            mid_y = (cy1 + cy2) / 2
+            handle_points = (
+                (cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2),
+                (mid_x, cy1), (mid_x, cy2), (cx1, mid_y), (cx2, mid_y),
+            )
+            for handle_x, handle_y in handle_points:
                 self.canvas.create_rectangle(
                     handle_x - HANDLE_SIZE,
                     handle_y - HANDLE_SIZE,
@@ -936,7 +964,7 @@ class AnnotationEditor:
             "start_point": (image_x, image_y),
             "start_bbox": bbox,
             "start_tip": tip,
-            "corner": hit.get("corner"),
+            "handle": hit.get("handle"),
         }
         self._update_buttons()
         self._render_scene()
@@ -1000,16 +1028,18 @@ class AnnotationEditor:
             y1 = start_bbox["y"]
             x2 = start_bbox["x"] + start_bbox["width"]
             y2 = start_bbox["y"] + start_bbox["height"]
-            corner = self.drag_state["corner"]
+            handle = self.drag_state["handle"]
 
-            if corner == "nw":
-                x1, y1 = image_x, image_y
-            elif corner == "ne":
-                x2, y1 = image_x, image_y
-            elif corner == "sw":
-                x1, y2 = image_x, image_y
-            elif corner == "se":
-                x2, y2 = image_x, image_y
+            # Corner handles move both coordinates; edge handles ("n", "s",
+            # "w", "e") move only their own side.
+            if "n" in handle:
+                y1 = image_y
+            if "s" in handle:
+                y2 = image_y
+            if "w" in handle:
+                x1 = image_x
+            if "e" in handle:
+                x2 = image_x
 
             normalized = self._normalize_box_from_points(x1, y1, x2, y2)
             annotation["bbox"] = normalized
@@ -1055,6 +1085,8 @@ class AnnotationEditor:
         reachable instead of being swallowed by it.
         """
         threshold = max(8.0 / self.canvas_scale, 3.0)
+        # Resize handles are drawn 1.5x larger than the original 8px reach.
+        handle_threshold = max(12.0 / self.canvas_scale, 3.0)
         tip_threshold_sq = (threshold * 1.5) ** 2
 
         # Tips first: a tip may sit inside any number of boxes and must not be
@@ -1078,18 +1110,26 @@ class AnnotationEditor:
             y1 = bbox["y"]
             x2 = bbox["x"] + bbox["width"]
             y2 = bbox["y"] + bbox["height"]
-            corners = {
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            # Corners come first so they win where a small box crowds the
+            # edge handles against them.
+            handles = {
                 "nw": (x1, y1),
                 "ne": (x2, y1),
                 "sw": (x1, y2),
                 "se": (x2, y2),
+                "n": (mid_x, y1),
+                "s": (mid_x, y2),
+                "w": (x1, mid_y),
+                "e": (x2, mid_y),
             }
-            for corner_name, (corner_x, corner_y) in corners.items():
-                if abs(corner_x - image_x) <= threshold and abs(corner_y - image_y) <= threshold:
+            for handle_name, (handle_x, handle_y) in handles.items():
+                if abs(handle_x - image_x) <= handle_threshold and abs(handle_y - image_y) <= handle_threshold:
                     return {
                         "index": self.selected_annotation_index,
                         "kind": "resize",
-                        "corner": corner_name,
+                        "handle": handle_name,
                     }
 
         # Interiors last, smallest area first. Equal areas keep the current

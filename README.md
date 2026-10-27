@@ -200,7 +200,8 @@ python -m scripts.annotation_editor --dataset cholec80
 - bbox 이동 (겹친 경우 가장 작은 박스가 선택된다)
 - bbox 리사이즈
 - tip 드래그 수정
-- `Add Tool[INS]`로 annotation 추가
+- `Add Tool[INS/Wheel]`로 annotation 추가 (이미지 위에서 마우스 휠 버튼 클릭으로도 가능하며, 추가 중에 다시 누르면 `Esc`처럼 취소)
+- 방향키 또는 이미지 위에서 마우스 휠 스크롤로 이전/다음 영상 이동 (휠 위: 이전, 휠 아래: 다음)
 - `Delete Tool[DEL]`로 annotation 삭제
 - `Save[F2]` 또는 `Ctrl+S`로 저장
 - `Reload[F3]`로 파일에서 다시 읽기
