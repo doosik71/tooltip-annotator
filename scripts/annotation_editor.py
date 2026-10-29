@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 from pathlib import Path
 import tkinter as tk
@@ -47,9 +48,12 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 HANDLE_SIZE = 7.5
 TIP_RADIUS = 6
 SEGMENTATION_ALPHA = 0.35
+# Add mode dims the image to this brightness, except inside the box being drawn.
+ADD_MODE_BRIGHTNESS = 0.5
 MIN_BOX_SIZE = 4
-# Pointer shape over tip and resize handles.
+# Pointer shape and fill colour for the tip or resize handle under the pointer.
 HANDLE_CURSOR = "crosshair"
+HANDLE_HOVER_FILL = "#ffffff"
 
 # Manually corrected frames are highlighted in the image list. tk.Listbox has no
 # per-item font option, so colour is the only way to make them stand out.
@@ -57,6 +61,19 @@ MANUAL_ITEM_BACKGROUND = "#ffe9a8"
 MANUAL_ITEM_FOREGROUND = "#1a1a1a"
 MANUAL_ITEM_SELECT_BACKGROUND = "#e8a33d"
 MANUAL_ITEM_SELECT_FOREGROUND = "#1a1a1a"
+
+# A thin strip beside the list scrollbar marks where manual frames and the
+# current frame sit in the whole list, like the overview ruler in VS Code.
+LIST_MARKER_WIDTH = 8
+LIST_MARKER_BACKGROUND = "#e6e6e6"
+# The visible-range box is shaded with this colour at this opacity.
+LIST_MARKER_VISIBLE_COLOR = "#000000"
+LIST_MARKER_VISIBLE_ALPHA = 0.3
+# A large split shows well under one pixel's worth of rows, so the visible-range
+# box is drawn at least this tall to stay findable.
+LIST_MARKER_VISIBLE_MIN_HEIGHT = 8
+LIST_MARKER_MANUAL_COLOR = MANUAL_ITEM_SELECT_BACKGROUND
+LIST_MARKER_CURRENT_COLOR = "#1565c0"
 
 # The tool number drawn on each bbox, as a multiple of the canvas default font.
 ANNOTATION_LABEL_FONT_SCALE = 2
@@ -139,6 +156,7 @@ class AnnotationEditor:
         self.current_annotations: list[dict[str, dict[str, int]]] = []
         self.current_source = SOURCE_AUTO
         self.manual_stems: set[str] = set()
+        self.manual_indices: set[int] = set()
         self.list_index_width = 1
         self.image_width = 0
         self.image_height = 0
@@ -146,6 +164,8 @@ class AnnotationEditor:
         self.selected_annotation_index: int | None = None
         self.mode = "select"
         self.drag_state: dict[str, object] | None = None
+        self.pointer_position: tuple[float, float] | None = None
+        self.hovered_handle: tuple[str, int, str | None] | None = None
         self.preview_box: tuple[float, float, float, float] | None = None
         self.dirty = False
         self.photo_image: tk.PhotoImage | None = None
@@ -283,7 +303,16 @@ class AnnotationEditor:
 
         list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.image_listbox.yview)
         list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.image_listbox.configure(yscrollcommand=list_scrollbar.set)
+        self.list_scrollbar = list_scrollbar
+        self.image_listbox.configure(yscrollcommand=self._on_list_scrolled)
+
+        self.list_marker = tk.Canvas(
+            list_frame,
+            width=LIST_MARKER_WIDTH,
+            background=LIST_MARKER_BACKGROUND,
+            highlightthickness=0,
+        )
+        self.list_marker.pack(side=tk.RIGHT, fill=tk.Y)
 
         right_panel = ttk.Frame(body)
         body.add(right_panel, weight=1)
@@ -325,7 +354,14 @@ class AnnotationEditor:
         # While the button is held the more specific <B1-Motion> wins, so the
         # cursor chosen before the press stays put for the whole drag.
         self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
         self.canvas.bind("<Configure>", self._on_canvas_resized)
+        self.list_marker.bind("<Configure>", lambda _event: self._render_list_markers())
+        # identify() still answers for the old layout while <Configure> is
+        # being handled, so measure once Tk is idle again.
+        self.list_scrollbar.bind(
+            "<Configure>", lambda _event: self.root.after_idle(self._fit_list_marker_to_trough)
+        )
         # Wheel click on the image toggles add mode: it enters it like Insert
         # and cancels it like Escape, so a new box can be started or abandoned
         # without leaving the mouse. Button-2 is the wheel on Windows and X11.
@@ -502,6 +538,7 @@ class AnnotationEditor:
         self.mode = "select"
         self.dirty = False
         self.manual_stems = self._list_manual_stems(split_name)
+        self.manual_indices = set()
         # Pad the running number to the digit count of the split's frame total,
         # so [00001] in a 71,032-frame split and [1] in a 3-frame one.
         self.list_index_width = len(str(len(self.image_paths))) or 1
@@ -511,6 +548,7 @@ class AnnotationEditor:
         for index, image_path in enumerate(self.image_paths):
             self.image_listbox.insert(tk.END, self._listbox_label(index, image_path))
             if image_path.stem in self.manual_stems:
+                self.manual_indices.add(index)
                 self._apply_listbox_style(index, True)
         self.suppress_listbox_event = False
 
@@ -523,6 +561,7 @@ class AnnotationEditor:
             self._render_scene()
             self._update_status("No images found in the selected split.")
         self._update_buttons()
+        self._render_list_markers()
 
     def _open_image_at_index(self, index: int) -> None:
         self.current_index = index
@@ -537,6 +576,7 @@ class AnnotationEditor:
             else SOURCE_AUTO
         )
         self._update_images_label()
+        self._render_list_markers()
         self.selected_annotation_index = 0 if self.current_annotations else None
         self.preview_box = None
         self.drag_state = None
@@ -790,8 +830,11 @@ class AnnotationEditor:
 
         if is_manual:
             self.manual_stems.add(self.current_image_path.stem)
+            self.manual_indices.add(self.current_index)
         else:
             self.manual_stems.discard(self.current_image_path.stem)
+            self.manual_indices.discard(self.current_index)
+        self._render_list_markers()
 
         selected = self.current_index in self.image_listbox.curselection()
         self.suppress_listbox_event = True
@@ -806,9 +849,108 @@ class AnnotationEditor:
             self.image_listbox.activate(self.current_index)
         self.suppress_listbox_event = False
 
+    def _on_list_scrolled(self, first: str, last: str) -> None:
+        """Forward the list's visible range to the scrollbar and the marker strip."""
+        self.list_scrollbar.set(first, last)
+        self._render_list_markers()
+
+    def _fit_list_marker_to_trough(self) -> None:
+        """Pad the marker strip so it spans only the scrollbar's scroll area.
+
+        The arrow buttons are measured with `identify()` instead of assuming a
+        size, since it differs between ttk themes (and a theme may have none).
+        """
+        scrollbar = self.list_scrollbar
+        height = scrollbar.winfo_height()
+        x = scrollbar.winfo_width() // 2
+        if height < 2:
+            return
+
+        top = 0
+        for y in range(height // 2):
+            if "uparrow" in scrollbar.identify(x, y):
+                top = y + 1
+            elif top:
+                break
+        bottom = height
+        for y in range(height - 1, height // 2, -1):
+            if "downarrow" in scrollbar.identify(x, y):
+                bottom = y
+            elif bottom != height:
+                break
+        self.list_marker.pack_configure(pady=(top, height - bottom))
+
+    def _render_list_markers(self) -> None:
+        """Redraw the strip beside the list scrollbar.
+
+        Each frame maps to a height proportional to its list position, and
+        marks sharing a pixel row collapse into one, so the cost follows the
+        number of manual frames rather than the split size.
+        """
+        self.list_marker.delete("all")
+        total = len(self.image_paths)
+        if total == 0:
+            return
+        width = max(self.list_marker.winfo_width(), 1)
+        height = max(self.list_marker.winfo_height(), 1)
+
+        def row_of(index: int) -> int:
+            return min(int(index * height / total), height - 2)
+
+        # 1. Manual frames.
+        manual_rows = {row_of(index) for index in self.manual_indices}
+        for y in manual_rows:
+            self.list_marker.create_rectangle(
+                0, y, width, y + 2, fill=LIST_MARKER_MANUAL_COLOR, width=0
+            )
+
+        # 2. The rows currently shown in the list, as a translucent box. It
+        # uses the same scale as the marks, so a mark inside the box is a row
+        # on screen, which the scrollbar thumb cannot show exactly.
+        first, last = self.image_listbox.yview()
+        top = first * height
+        bottom = last * height
+        if bottom - top < LIST_MARKER_VISIBLE_MIN_HEIGHT:
+            center = (top + bottom) / 2
+            top = center - LIST_MARKER_VISIBLE_MIN_HEIGHT / 2
+            bottom = center + LIST_MARKER_VISIBLE_MIN_HEIGHT / 2
+        top = min(max(top, 0), height - LIST_MARKER_VISIBLE_MIN_HEIGHT)
+        bottom = max(min(bottom, height), top + LIST_MARKER_VISIBLE_MIN_HEIGHT)
+        # Canvas items have no alpha, so the box is painted with what lies
+        # beneath it (background and manual marks) pre-blended with the shade.
+        self.list_marker.create_rectangle(
+            0, top, width, bottom,
+            fill=self._shade_visible_range(LIST_MARKER_BACKGROUND), width=0,
+        )
+        shaded_manual_color = self._shade_visible_range(LIST_MARKER_MANUAL_COLOR)
+        for y in manual_rows:
+            if y + 2 > top and y < bottom:
+                self.list_marker.create_rectangle(
+                    0, max(y, top), width, min(y + 2, bottom),
+                    fill=shaded_manual_color, width=0,
+                )
+
+        # 3. The current frame, on top of everything.
+        if self.current_index is not None:
+            y = row_of(self.current_index)
+            self.list_marker.create_rectangle(
+                0, y - 1, width, y + 1, fill=LIST_MARKER_CURRENT_COLOR, width=0
+            )
+
+    def _shade_visible_range(self, color: str) -> str:
+        """Return `color` as seen through the translucent visible-range box."""
+        base = self.list_marker.winfo_rgb(color)
+        shade = self.list_marker.winfo_rgb(LIST_MARKER_VISIBLE_COLOR)
+        channels = (
+            round((b * (1 - LIST_MARKER_VISIBLE_ALPHA) + s * LIST_MARKER_VISIBLE_ALPHA) / 257)
+            for b, s in zip(base, shade)
+        )
+        return "#{:02x}{:02x}{:02x}".format(*channels)
+
     def _render_scene(self) -> None:
         self.canvas.delete("all")
         if self.current_image_rgb is None:
+            self.hovered_handle = None
             self.canvas.create_text(
                 self.canvas.winfo_width() / 2,
                 self.canvas.winfo_height() / 2,
@@ -836,9 +978,12 @@ class AnnotationEditor:
         self.canvas_image_height = display_height
 
         resized = cv2.resize(composed, (display_width, display_height), interpolation=cv2.INTER_AREA)
+        if self.mode == "add":
+            resized = self._dim_for_add_mode(resized)
         self.photo_image = self._rgb_to_photoimage(resized)
         self.canvas.create_image(offset_x, offset_y, anchor=tk.NW, image=self.photo_image)
 
+        self.hovered_handle = self._handle_under_pointer()
         if self.show_annotation_var.get():
             for index, annotation in enumerate(self.current_annotations):
                 self._draw_annotation_box(index, annotation)
@@ -859,6 +1004,22 @@ class AnnotationEditor:
                 width=2,
                 dash=(6, 3),
             )
+
+    def _dim_for_add_mode(self, display_rgb: np.ndarray) -> np.ndarray:
+        """Darken the displayed image, keeping the box being drawn at full brightness.
+
+        Applied to the display-sized image after compositing, so screenshots
+        never pick it up.
+        """
+        dimmed = cv2.convertScaleAbs(display_rgb, alpha=ADD_MODE_BRIGHTNESS)
+        if self.preview_box is not None:
+            x1, y1, x2, y2 = self.preview_box
+            left = int(min(x1, x2) * self.canvas_scale)
+            top = int(min(y1, y2) * self.canvas_scale)
+            right = int(math.ceil(max(x1, x2) * self.canvas_scale))
+            bottom = int(math.ceil(max(y1, y2) * self.canvas_scale))
+            dimmed[top:bottom, left:right] = display_rgb[top:bottom, left:right]
+        return dimmed
 
     def _compose_display_image(self) -> np.ndarray:
         composed = self.current_image_rgb.copy()
@@ -895,18 +1056,19 @@ class AnnotationEditor:
         if is_selected:
             mid_x = (cx1 + cx2) / 2
             mid_y = (cy1 + cy2) / 2
-            handle_points = (
-                (cx1, cy1), (cx2, cy1), (cx1, cy2), (cx2, cy2),
-                (mid_x, cy1), (mid_x, cy2), (cx1, mid_y), (cx2, mid_y),
-            )
-            for handle_x, handle_y in handle_points:
+            handle_points = {
+                "nw": (cx1, cy1), "ne": (cx2, cy1), "sw": (cx1, cy2), "se": (cx2, cy2),
+                "n": (mid_x, cy1), "s": (mid_x, cy2), "w": (cx1, mid_y), "e": (cx2, mid_y),
+            }
+            for handle_name, (handle_x, handle_y) in handle_points.items():
+                hovered = self.hovered_handle == ("resize", index, handle_name)
                 self.canvas.create_rectangle(
                     handle_x - HANDLE_SIZE,
                     handle_y - HANDLE_SIZE,
                     handle_x + HANDLE_SIZE,
                     handle_y + HANDLE_SIZE,
                     outline="#111111",
-                    fill="#ffd34d",
+                    fill=HANDLE_HOVER_FILL if hovered else "#ffd34d",
                     width=1,
                 )
 
@@ -936,7 +1098,7 @@ class AnnotationEditor:
             tip_x + TIP_RADIUS,
             tip_y + TIP_RADIUS,
             outline="#7a0000",
-            fill="#ff4d4d",
+            fill=HANDLE_HOVER_FILL if self.hovered_handle == ("tip", index, None) else "#ff4d4d",
             width=2,
         )
 
@@ -968,6 +1130,7 @@ class AnnotationEditor:
         self.drag_state = None
         self._update_buttons()
         self._update_status("Add mode: drag on the image to create a new bbox.")
+        self._render_scene()
 
     def _delete_selected(self) -> None:
         if self.selected_annotation_index is None:
@@ -1059,22 +1222,50 @@ class AnnotationEditor:
         self._render_scene()
 
     def _on_canvas_motion(self, event: tk.Event[tk.Misc]) -> None:
-        """Show a crosshair over tip and resize handles.
+        """Show a crosshair and highlight the tip or resize handle under the pointer.
 
         The crosshair marks the exact hit point, which an arrow does not over
         remote displays such as TurboVNC, where the arrow tip can sit a few
         pixels off the real pointer position.
         """
-        hit = None
-        if (
-            self.current_image_rgb is not None
-            and self.mode == "select"
-            and self.show_annotation_var.get()
-        ):
-            hit = self._hit_test(*self._canvas_to_image(event.x, event.y))
-        cursor = HANDLE_CURSOR if hit is not None and hit["kind"] in ("tip", "resize") else ""
+        self.pointer_position = (event.x, event.y)
+        handle = self._handle_under_pointer()
+        cursor = HANDLE_CURSOR if handle is not None else ""
         if self.canvas.cget("cursor") != cursor:
             self.canvas.configure(cursor=cursor)
+        if handle != self.hovered_handle:
+            self._render_scene()
+
+    def _on_canvas_leave(self, _event: tk.Event[tk.Misc]) -> None:
+        self.pointer_position = None
+        if self.hovered_handle is not None:
+            self._render_scene()
+
+    def _handle_under_pointer(self) -> tuple[str, int, str | None] | None:
+        """Return the (kind, index, handle) of the tip or resize handle to highlight.
+
+        Recomputed on every render rather than cached from the last motion, so
+        switching images or deleting a tool never leaves a stale highlight. A
+        handle being dragged stays highlighted even when the pointer is
+        clamped away from it.
+        """
+        if self.drag_state is not None and self.drag_state["kind"] in ("tip", "resize"):
+            return (
+                str(self.drag_state["kind"]),
+                int(self.drag_state["index"]),
+                self.drag_state["handle"] if self.drag_state["kind"] == "resize" else None,
+            )
+        if (
+            self.pointer_position is None
+            or self.current_image_rgb is None
+            or self.mode != "select"
+            or not self.show_annotation_var.get()
+        ):
+            return None
+        hit = self._hit_test(*self._canvas_to_image(*self.pointer_position))
+        if hit is None or hit["kind"] not in ("tip", "resize"):
+            return None
+        return (hit["kind"], hit["index"], hit.get("handle"))
 
     def _on_canvas_drag(self, event: tk.Event[tk.Misc]) -> None:
         if self.current_image_rgb is None or self.drag_state is None:
