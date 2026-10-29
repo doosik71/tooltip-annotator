@@ -51,10 +51,11 @@ uv sync
     │   │   ├── train/
     │   │   ├── val/
     │   │   └── test/
-    │   └── annotation-manual/   # 사람이 보정한 레이블의 원본 (재생성 불가, 별도 git 저장소)
-    │       ├── train/
-    │       ├── val/
-    │       └── test/
+    │   ├── annotation-manual/   # 사람이 보정한 레이블의 원본 (재생성 불가, 별도 git 저장소)
+    │   │   ├── train/
+    │   │   ├── val/
+    │   │   └── test/
+    │   └── screenshot/          # (선택) annotation_editor 스크린샷
     └── cholec80/
         └── ... (동일 구조)
 ```
@@ -207,6 +208,7 @@ python -m scripts.annotation_editor --dataset cholec80
 - `Reload[F3]`로 파일에서 다시 읽기
 - `Auto Save`(기본 켜짐)는 다른 이미지로 이동할 때 묻지 않고 자동 저장. 끄려면 체크박스를 해제하거나 `--no-auto-save`로 실행
 - `Revert to Auto[F4]`로 자동 생성 결과로 되돌리기
+- `Screenshot[F5]`로 현재 이미지를 화면에 표시 중인 overlay와 함께 `data/dataset/<dataset>/screenshot/`에 저장 (발표 자료용)
 
 저장하면 `annotation-manual/{split}/`에 원본이 기록되고 같은 내용이 `annotation/{split}/`에도 반영된다. 좌측 이미지 목록에서 수동 보정된 프레임은 **노란색 배경**으로 강조되고 파일명 앞에 `*` 표시가 붙는다.
 

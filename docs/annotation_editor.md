@@ -106,6 +106,12 @@ python -m scripts.annotation_editor
   - 저장하지 않은 변경을 버리고 파일에서 다시 읽는다. 단축키 `F3`.
 - `Revert to Auto[F4]`
   - 현재 프레임의 수동 보정본을 삭제하고 segmentation mask에서 자동 생성 결과를 다시 계산한다. 단축키 `F4`. 자동 생성 상태인 프레임에서는 비활성화된다.
+- `Screenshot[F5]`
+  - 현재 이미지를 overlay와 함께 `data/dataset/<dataset>/screenshot/<이미지 파일 이름>`으로 저장한다. 단축키 `F5`이다.
+  - segmentation/annotation overlay는 `Show Segmentation`/`Show Annotation` 체크 상태를 그대로 따른다.
+  - 화면 캡처가 아니라 원본 해상도로 다시 그린다. 선택 강조색, 리사이즈 핸들, 추가 모드 미리보기 박스 같은 편집용 표시는 넣지 않으며, 모든 박스는 비선택 색(`#3bd7ff`)으로 그린다. tip 연결선은 점선이 아닌 실선이다.
+  - 저장하지 않은 편집도 화면에 보이는 그대로 반영된다. 같은 이름의 파일이 있으면 덮어쓴다.
+  - `--images` 등 경로 옵션만으로 실행해 데이터셋 이름이 없으면 `--images` 디렉터리 옆의 `screenshot/`에 저장한다.
 - `Auto Save`
   - 켜 두면 다른 이미지나 split으로 이동하거나 창을 닫을 때 저장 여부를 묻지 않고 바로 저장한다. **기본값은 켜짐**이며, `--no-auto-save`로 끈 상태로 시작할 수 있다.
 - `Show Segmentation`
@@ -122,6 +128,7 @@ python -m scripts.annotation_editor
 | `Save [F2]`           | 주황 `#e65100`     |
 | `Reload [F3]`         | 보라 `#6a1b9a`     |
 | `Revert to Auto [F4]` | 초록 `#2e7d32`     |
+| `Screenshot [F5]`     | 청록 `#00838f`     |
 
 비활성 상태에서는 모두 회색 `#9e9e9e`로 바뀌어, 색이 있는 버튼이라도 지금 누를 수 없다는 것이 드러난다.
 
@@ -136,6 +143,7 @@ python -m scripts.annotation_editor
 | `F2` 또는 `Ctrl+S` | 저장                            |
 | `F3`               | 파일에서 다시 읽기              |
 | `F4`               | 자동 생성 결과로 되돌리기       |
+| `F5`               | overlay 포함 스크린샷 저장      |
 | `Esc`              | 추가 모드 취소                  |
 | 방향키             | 이전/다음 이미지                |
 

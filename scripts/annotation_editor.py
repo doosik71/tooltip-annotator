@@ -21,6 +21,7 @@ from tooltip.dataset_paths import (
     images_dir,
     list_datasets,
     resolve_path,
+    screenshot_dir,
     segmentation_dir,
 )
 
@@ -66,6 +67,7 @@ BUTTON_STYLES = {
     "Save.TButton": "#e65100",    # orange
     "Reload.TButton": "#6a1b9a",  # purple
     "Revert.TButton": "#2e7d32",  # green
+    "Screenshot.TButton": "#00838f",  # teal
 }
 ADD_ACTIVE_STYLE = "AddActive.TButton"
 ADD_ACTIVE_BACKGROUND = "#ffe680"
@@ -79,6 +81,17 @@ DELETE_BUTTON_LABEL = "Delete Tool [DEL]"
 SAVE_BUTTON_LABEL = "Save [F2]"
 RELOAD_BUTTON_LABEL = "Reload [F3]"
 REVERT_BUTTON_LABEL = "Revert to Auto [F4]"
+SCREENSHOT_BUTTON_LABEL = "Screenshot [F5]"
+
+# Screenshots are drawn with OpenCV at the image's own resolution, so these
+# mirror the canvas colours (as RGB) and sizes in image pixels.
+SCREENSHOT_BOX_COLOR = (59, 215, 255)       # #3bd7ff
+SCREENSHOT_TIP_LINE_COLOR = (255, 128, 128)  # #ff8080
+SCREENSHOT_TIP_FILL_COLOR = (255, 77, 77)    # #ff4d4d
+SCREENSHOT_TIP_OUTLINE_COLOR = (122, 0, 0)   # #7a0000
+SCREENSHOT_LINE_WIDTH = 2
+SCREENSHOT_LABEL_FONT_SCALE = 0.8
+SCREENSHOT_LABEL_THICKNESS = 2
 
 
 class AnnotationEditor:
@@ -222,6 +235,12 @@ class AnnotationEditor:
         )
         self.revert_button.pack(side=tk.LEFT, padx=(8, 0))
 
+        self.screenshot_button = ttk.Button(
+            top_bar, text=SCREENSHOT_BUTTON_LABEL, style="Screenshot.TButton",
+            command=self._save_screenshot
+        )
+        self.screenshot_button.pack(side=tk.LEFT, padx=(8, 0))
+
         self.auto_save_checkbutton = ttk.Checkbutton(
             top_bar,
             text="Auto Save",
@@ -325,6 +344,7 @@ class AnnotationEditor:
         self.root.bind("<F2>", self._on_save_shortcut)
         self.root.bind("<F3>", self._on_reload_shortcut)
         self.root.bind("<F4>", self._on_revert_shortcut)
+        self.root.bind("<F5>", self._on_screenshot_shortcut)
         self.root.bind("<Escape>", self._on_escape)
 
     def _ensure_output_dirs(self) -> None:
@@ -417,6 +437,10 @@ class AnnotationEditor:
 
     def _on_revert_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._revert_to_auto()
+        return "break"
+
+    def _on_screenshot_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
+        self._save_screenshot()
         return "break"
 
     def _on_previous_image_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
@@ -653,6 +677,59 @@ class AnnotationEditor:
         self._update_buttons()
         self._update_status("Reverted to the automatic annotation.")
         self._render_scene()
+
+    def _save_screenshot(self) -> None:
+        """Write the current frame with its visible overlays for slides.
+
+        The overlays follow the Show Segmentation / Show Annotation toggles. The
+        image keeps its native resolution, and editing aids (selection
+        highlight, resize handles, the add-mode preview box) are left out.
+        """
+        if self.current_image_path is None or self.current_image_rgb is None:
+            return
+
+        composed = self._compose_display_image()
+        if self.show_annotation_var.get():
+            self._draw_screenshot_annotations(composed)
+
+        # With explicit path options there may be no dataset name; the images
+        # root sits in the dataset directory, so its sibling is the fallback.
+        screenshot_root = (
+            screenshot_dir(self.current_dataset)
+            if self.current_dataset
+            else self.images_root.parent / "screenshot"
+        )
+        screenshot_root.mkdir(parents=True, exist_ok=True)
+        screenshot_path = screenshot_root / self.current_image_path.name
+        if not cv2.imwrite(str(screenshot_path), cv2.cvtColor(composed, cv2.COLOR_RGB2BGR)):
+            messagebox.showerror("Screenshot", f"Failed to write screenshot: {screenshot_path}")
+            return
+        self._update_status(f"Saved screenshot: {screenshot_path}")
+
+    def _draw_screenshot_annotations(self, image: np.ndarray) -> None:
+        """Draw boxes, numbers and tips onto an RGB image, as on the canvas."""
+        for index, annotation in enumerate(self.current_annotations):
+            bbox = annotation["bbox"]
+            x1, y1 = bbox["x"], bbox["y"]
+            x2, y2 = x1 + bbox["width"], y1 + bbox["height"]
+            cv2.rectangle(image, (x1, y1), (x2, y2), SCREENSHOT_BOX_COLOR,
+                          SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
+            label = str(index + 1)
+            (_, text_height), _ = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, SCREENSHOT_LABEL_FONT_SCALE, SCREENSHOT_LABEL_THICKNESS
+            )
+            cv2.putText(image, label, (x1 + 6, y1 + 6 + text_height), cv2.FONT_HERSHEY_SIMPLEX,
+                        SCREENSHOT_LABEL_FONT_SCALE, SCREENSHOT_BOX_COLOR,
+                        SCREENSHOT_LABEL_THICKNESS, cv2.LINE_AA)
+
+        for annotation in self.current_annotations:
+            bbox = annotation["bbox"]
+            tip = (annotation["tip"]["x"], annotation["tip"]["y"])
+            center = (bbox["x"] + bbox["width"] // 2, bbox["y"] + bbox["height"] // 2)
+            cv2.line(image, center, tip, SCREENSHOT_TIP_LINE_COLOR, SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
+            cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_FILL_COLOR, -1, cv2.LINE_AA)
+            cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_OUTLINE_COLOR,
+                       SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
 
     def _annotation_path_for_image(self, image_path: Path) -> Path:
         return self.annotation_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
@@ -986,10 +1063,20 @@ class AnnotationEditor:
 
         annotation = self.current_annotations[int(self.drag_state["index"])]
         if kind == "tip":
-            annotation["tip"] = {
+            tip = {
                 "x": int(round(image_x)),
                 "y": int(round(image_y)),
             }
+            annotation["tip"] = tip
+            # Grow the box from its drag-start extent so it always contains the
+            # tip pixel; dragging the tip back inside restores the original box.
+            start_bbox = self.drag_state["start_bbox"]
+            annotation["bbox"] = self._normalize_box_from_points(
+                min(start_bbox["x"], tip["x"]),
+                min(start_bbox["y"], tip["y"]),
+                max(start_bbox["x"] + start_bbox["width"], tip["x"] + 1),
+                max(start_bbox["y"] + start_bbox["height"], tip["y"] + 1),
+            )
             self._mark_dirty(render=False)
             self._render_scene()
             return
@@ -1171,6 +1258,9 @@ class AnnotationEditor:
         )
         self.revert_button.configure(
             state=tk.NORMAL if self.current_source == SOURCE_MANUAL else tk.DISABLED
+        )
+        self.screenshot_button.configure(
+            state=tk.NORMAL if self.current_image_path is not None else tk.DISABLED
         )
 
     def _update_images_label(self) -> None:

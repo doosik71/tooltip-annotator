@@ -8,6 +8,7 @@ Data layout convention:
     data/dataset/<name>/segmentation/   binary masks (train/val/test)
     data/dataset/<name>/annotation/     bbox/tip JSON (train/val/test), generated
     data/dataset/<name>/annotation-manual/  hand-corrected JSON, never generated
+    data/dataset/<name>/screenshot/     editor screenshots with overlays
 """
 from __future__ import annotations
 
@@ -45,6 +46,10 @@ def annotation_manual_dir(name: str) -> Path:
     ever writes here.
     """
     return DATA_ROOT / "dataset" / name / "annotation-manual"
+
+
+def screenshot_dir(name: str) -> Path:
+    return DATA_ROOT / "dataset" / name / "screenshot"
 
 
 def list_datasets() -> list[str]:
