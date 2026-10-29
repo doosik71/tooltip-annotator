@@ -48,6 +48,8 @@ HANDLE_SIZE = 7.5
 TIP_RADIUS = 6
 SEGMENTATION_ALPHA = 0.35
 MIN_BOX_SIZE = 4
+# Pointer shape over tip and resize handles.
+HANDLE_CURSOR = "crosshair"
 
 # Manually corrected frames are highlighted in the image list. tk.Listbox has no
 # per-item font option, so colour is the only way to make them stand out.
@@ -210,7 +212,7 @@ class AnnotationEditor:
         self.split_combobox.pack(side=tk.LEFT, padx=(8, 18))
 
         self.add_button = ttk.Button(
-            top_bar, text=ADD_BUTTON_LABEL, style="Add.TButton", command=self._enter_add_mode
+            top_bar, text=ADD_BUTTON_LABEL, style="Add.TButton", command=self._on_add_button
         )
         self.add_button.pack(side=tk.LEFT)
 
@@ -320,6 +322,9 @@ class AnnotationEditor:
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        # While the button is held the more specific <B1-Motion> wins, so the
+        # cursor chosen before the press stays put for the whole drag.
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
         self.canvas.bind("<Configure>", self._on_canvas_resized)
         # Wheel click on the image toggles add mode: it enters it like Insert
         # and cancels it like Escape, so a new box can be started or abandoned
@@ -450,6 +455,13 @@ class AnnotationEditor:
     def _on_next_image_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._navigate_images(1)
         return "break"
+
+    def _on_add_button(self) -> None:
+        # Clicking the button again while adding cancels, like a wheel click.
+        if self.mode == "add":
+            self._on_escape(None)
+        else:
+            self._enter_add_mode()
 
     def _on_canvas_wheel_click(self, event: tk.Event[tk.Misc]) -> str:
         if self.mode == "add":
@@ -1046,6 +1058,24 @@ class AnnotationEditor:
         self._update_buttons()
         self._render_scene()
 
+    def _on_canvas_motion(self, event: tk.Event[tk.Misc]) -> None:
+        """Show a crosshair over tip and resize handles.
+
+        The crosshair marks the exact hit point, which an arrow does not over
+        remote displays such as TurboVNC, where the arrow tip can sit a few
+        pixels off the real pointer position.
+        """
+        hit = None
+        if (
+            self.current_image_rgb is not None
+            and self.mode == "select"
+            and self.show_annotation_var.get()
+        ):
+            hit = self._hit_test(*self._canvas_to_image(event.x, event.y))
+        cursor = HANDLE_CURSOR if hit is not None and hit["kind"] in ("tip", "resize") else ""
+        if self.canvas.cget("cursor") != cursor:
+            self.canvas.configure(cursor=cursor)
+
     def _on_canvas_drag(self, event: tk.Event[tk.Misc]) -> None:
         if self.current_image_rgb is None or self.drag_state is None:
             return
@@ -1273,15 +1303,9 @@ class AnnotationEditor:
             self.status_var.set(message)
             return
 
-        filename = self.current_image_path.name if self.current_image_path else "<no image>"
         tool_count = len(self.current_annotations)
-        selected = self.selected_annotation_index + 1 if self.selected_annotation_index is not None else 0
-        dirty_text = "modified" if self.dirty else "saved"
         mode_text = "add" if self.mode == "add" else "select"
-        self.status_var.set(
-            f"{self.current_split} | {filename} | {self.current_source} | tools={tool_count} | "
-            f"selected={selected} | {dirty_text} | mode={mode_text}"
-        )
+        self.status_var.set(f"tools={tool_count} | mode={mode_text}")
 
     def _confirm_leave_current_image(self) -> bool:
         if not self.dirty:
