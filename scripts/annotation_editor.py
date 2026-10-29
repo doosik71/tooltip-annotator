@@ -78,6 +78,10 @@ LIST_MARKER_CURRENT_COLOR = "#1565c0"
 # The tool number drawn on each bbox, as a multiple of the canvas default font.
 ANNOTATION_LABEL_FONT_SCALE = 2
 
+# The tool count in the status bar stands out from the rest of the readout.
+TOOL_COUNT_FONT_SCALE = 1.5
+TOOL_COUNT_FOREGROUND = "#1565c0"
+
 # Toolbar buttons are colour-coded by what they do: creating, destroying,
 # writing to disk, and discarding in-memory edits.
 BUTTON_STYLES = {
@@ -138,6 +142,11 @@ class AnnotationEditor:
             size=canvas_font.cget("size") * ANNOTATION_LABEL_FONT_SCALE,
             weight=canvas_font.cget("weight"),
         )
+        self.tool_count_font = tkfont.Font(
+            family=canvas_font.cget("family"),
+            size=round(canvas_font.cget("size") * TOOL_COUNT_FONT_SCALE),
+            weight="bold",
+        )
 
         self.dataset_var = tk.StringVar(value=self.current_dataset)
         self.split_var = tk.StringVar(value=SPLIT_NAMES[0])
@@ -145,6 +154,7 @@ class AnnotationEditor:
         self.show_segmentation_var = tk.BooleanVar(value=True)
         self.show_annotation_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Ready")
+        self.tool_count_var = tk.StringVar(value="0")
         self.images_label_var = tk.StringVar(value="Images (0 / 0)")
 
         self.current_split = SPLIT_NAMES[0]
@@ -330,7 +340,19 @@ class AnnotationEditor:
         bottom_bar = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Label(bottom_bar, text=instruction).pack(side=tk.LEFT)
-        ttk.Label(bottom_bar, textvariable=self.status_var).pack(side=tk.RIGHT)
+        # The tool count gets labels of its own so it can be coloured and stay
+        # visible while a status message replaces the rest of the readout.
+        status_frame = ttk.Frame(bottom_bar)
+        status_frame.pack(side=tk.RIGHT)
+        ttk.Label(status_frame, text="tools").pack(side=tk.LEFT)
+        ttk.Label(
+            status_frame,
+            textvariable=self.tool_count_var,
+            font=self.tool_count_font,
+            foreground=TOOL_COUNT_FOREGROUND,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Label(status_frame, text="|").pack(side=tk.LEFT, padx=6)
+        ttk.Label(status_frame, textvariable=self.status_var).pack(side=tk.LEFT)
 
         self._update_buttons()
 
@@ -1351,7 +1373,18 @@ class AnnotationEditor:
 
             normalized = self._normalize_box_from_points(x1, y1, x2, y2)
             annotation["bbox"] = normalized
-            annotation["tip"] = self._normalize_tip(annotation["tip"])
+            # Pull the tip from its drag-start position onto the nearest pixel
+            # inside the box, so shrinking never leaves it outside; growing
+            # the box back restores the original tip.
+            start_tip = self.drag_state["start_tip"]
+            annotation["tip"] = {
+                "x": self._clamp_int(
+                    start_tip["x"], normalized["x"], normalized["x"] + normalized["width"] - 1
+                ),
+                "y": self._clamp_int(
+                    start_tip["y"], normalized["y"], normalized["y"] + normalized["height"] - 1
+                ),
+            }
             self._mark_dirty(render=False)
             self._render_scene()
 
@@ -1490,13 +1523,13 @@ class AnnotationEditor:
         self.images_label_var.set(f"Images ({current_position:,} / {total_count:,})")
 
     def _update_status(self, message: str | None = None) -> None:
+        self.tool_count_var.set(str(len(self.current_annotations)))
         if message is not None:
             self.status_var.set(message)
             return
 
-        tool_count = len(self.current_annotations)
         mode_text = "add" if self.mode == "add" else "select"
-        self.status_var.set(f"tools={tool_count} | mode={mode_text}")
+        self.status_var.set(f"mode={mode_text}")
 
     def _confirm_leave_current_image(self) -> bool:
         if not self.dirty:
