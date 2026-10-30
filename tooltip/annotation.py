@@ -44,6 +44,12 @@ ANNOTATION_SUFFIX = ".json"
 SOURCE_AUTO = "auto"
 SOURCE_MANUAL = "manual"
 
+# Contours this small are almost always noise rather than a tool: drop a box
+# when both sides are under SMALL_BOX_MIN_SIZE or either side is under
+# THIN_BOX_MIN_SIZE.
+SMALL_BOX_MIN_SIZE = 16
+THIN_BOX_MIN_SIZE = 10
+
 
 def load_binary_mask(mask_path: Path) -> np.ndarray:
     mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
@@ -87,6 +93,12 @@ def compute_tip(points: np.ndarray, image_center: np.ndarray) -> np.ndarray:
     return point_a if distance_a <= distance_b else point_b
 
 
+def is_too_small_box(width: int, height: int) -> bool:
+    if width < SMALL_BOX_MIN_SIZE and height < SMALL_BOX_MIN_SIZE:
+        return True
+    return width < THIN_BOX_MIN_SIZE or height < THIN_BOX_MIN_SIZE
+
+
 def extract_annotations(mask: np.ndarray) -> list[dict[str, object]]:
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     image_height, image_width = mask.shape[:2]
@@ -98,9 +110,12 @@ def extract_annotations(mask: np.ndarray) -> list[dict[str, object]]:
         if contour.size == 0:
             continue
 
+        x, y, width, height = cv2.boundingRect(contour.astype(np.int32))
+        if is_too_small_box(width, height):
+            continue
+
         points = contour.reshape(-1, 2).astype(np.float32)
         tip = compute_tip(points, image_center)
-        x, y, width, height = cv2.boundingRect(contour.astype(np.int32))
 
         annotation = {
             "bbox": {

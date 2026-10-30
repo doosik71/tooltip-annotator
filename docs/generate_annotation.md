@@ -211,7 +211,7 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
 5. split별로 mask 파일 목록을 정렬해 수집한다.
 6. 해당 프레임의 수동 보정본이 있으면 그것을 출력으로 복사하고 다음 프레임으로 넘어간다.
 7. 없으면 mask를 읽어 binary mask로 변환한다.
-8. mask에서 외곽 contour를 찾고, contour마다 bounding box와 tip 좌표를 계산한다.
+8. mask에서 외곽 contour를 찾고, contour마다 bounding box와 tip 좌표를 계산한다. 너무 작은 bbox는 노이즈로 보고 버린다(아래 "작은 박스 제외" 참고).
 9. 결과를 JSON으로 직렬화해 split별 출력 폴더에 저장한다.
 10. 모든 split 처리가 끝나면 split별 저장/건너뜀/수동 보정 개수를 출력한다.
 
@@ -302,8 +302,10 @@ bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 �
   - 기준점에서 가장 먼 점을 반환한다.
 - `compute_tip(points, image_center)`
   - 양 끝 극점을 구하고 이미지 중심에 가까운 점을 tip으로 선택한다.
+- `is_too_small_box(width, height)`
+  - 노이즈로 보고 버릴 bbox 크기인지 판정한다.
 - `extract_annotations(mask)`
-  - contour별 bbox/tip을 만들어 정렬된 annotation 리스트로 반환한다.
+  - contour별 bbox/tip을 만들고 너무 작은 bbox를 버린 뒤, 정렬된 annotation 리스트로 반환한다.
 - `build_payload(image_name, width, height, annotations, source)`
   - 메타와 annotation 리스트를 합쳐 payload를 만든다. `source`가 `manual`이면 `edited_at`을 덧붙인다.
 - `build_auto_payload(mask_path, mask)`
@@ -372,6 +374,13 @@ contour는 `cv2.findContours(mask, RETR_EXTERNAL, CHAIN_APPROX_NONE)`로 찾는�
 - `RETR_EXTERNAL`: 가장 바깥 contour만 추출하므로, 도구 내부의 구멍은 별도 영역으로 잡지 않는다.
 - `CHAIN_APPROX_NONE`: contour의 모든 경계 점을 보존한다. 극점(tip 후보) 탐색이 점 집합 기반이라 점을 압축하지 않는다.
 
+**작은 박스 제외**: contour의 bbox가 다음 중 하나에 해당하면 annotation에서 제외한다. 이렇게 작은 영역은 실제 도구가 아닌 마스크 노이즈인 경우가 대부분이었다.
+
+- 폭과 높이가 **모두** `SMALL_BOX_MIN_SIZE`(16px)보다 작다.
+- 폭 **또는** 높이가 `THIN_BOX_MIN_SIZE`(10px)보다 작다.
+
+필터는 `tooltip/annotation.py`의 `extract_annotations()` 안에 있으므로, annotation editor에서 프레임을 자동 결과로 되돌릴 때도 같은 기준이 적용된다. 이미 만들어 둔 JSON에는 소급 적용되지 않으므로 `--overwrite`로 다시 생성해야 한다. 수동 보정본은 그대로 유지된다.
+
 #### 4. tip 계산 로직
 
 `compute_tip()`은 다음을 수행한다.
@@ -425,7 +434,7 @@ JSON 직렬화도 `sort_keys=True`라서 키 순서까지 결정적이다. 이�
 
 - 입력 split 디렉터리의 하위 폴더를 재귀 탐색하지 않는다.
 - tip 추정이 "양 끝 극점 중 이미지 중심에 가까운 점" 휴리스틱에 의존하므로 항상 정확하지 않다.
-- contour 면적/크기에 대한 최소 임계값이 없어, 노이즈로 생긴 작은 영역도 annotation으로 들어올 수 있다.
+- 작은 박스 제외 기준(16px / 10px)이 코드 상수로 고정되어 있어 CLI로 바꿀 수 없다. 기준보다 큰 노이즈 영역은 여전히 annotation으로 들어올 수 있다.
 - `RETR_EXTERNAL`만 사용하므로 겹치거나 중첩된 도구를 분리하지 못할 수 있다.
 - 출력 좌표가 정수로 고정되어 있어 서브픽셀 정밀도는 유지되지 않는다.
 - 로그 출력이 `print()`와 `tqdm`에 묶여 있어 구조화된 로그에는 적합하지 않다.
@@ -434,7 +443,7 @@ JSON 직렬화도 `sort_keys=True`라서 키 순서까지 결정적이다. 이�
 
 ### 확장 권장 사항
 
-1. 최소 contour 면적 옵션을 추가해 노이즈 영역을 걸러내기
+1. 작은 박스 제외 기준을 CLI 옵션으로 노출하기
 2. tip 추정 알고리즘을 교체 가능하게 분리(예: skeleton 기반, 곡률 기반)
 3. 다중/중첩 도구 분리를 위해 contour 검색 모드나 후처리 추가
 4. 클래스/라벨 정보를 annotation에 포함할 수 있도록 스키마 확장
