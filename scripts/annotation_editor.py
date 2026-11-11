@@ -10,7 +10,7 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from tooltip.annotation import (
     ANNOTATION_SUFFIX,
-    SOURCE_AUTO,
+    SOURCE_MASK,
     SOURCE_MANUAL,
     build_payload,
     extract_annotations,
@@ -164,7 +164,7 @@ class AnnotationEditor:
         self.current_image_rgb: np.ndarray | None = None
         self.current_segmentation_mask: np.ndarray | None = None
         self.current_annotations: list[dict[str, dict[str, int]]] = []
-        self.current_source = SOURCE_AUTO
+        self.current_source = SOURCE_MASK
         self.manual_stems: set[str] = set()
         self.manual_indices: set[int] = set()
         self.list_index_width = 1
@@ -553,7 +553,7 @@ class AnnotationEditor:
         self.current_image_rgb = None
         self.current_segmentation_mask = None
         self.current_annotations = []
-        self.current_source = SOURCE_AUTO
+        self.current_source = SOURCE_MASK
         self.selected_annotation_index = None
         self.preview_box = None
         self.drag_state = None
@@ -595,7 +595,7 @@ class AnnotationEditor:
         self.current_source = (
             SOURCE_MANUAL
             if self.current_image_path.stem in self.manual_stems
-            else SOURCE_AUTO
+            else SOURCE_MASK
         )
         self._update_images_label()
         self._render_list_markers()
@@ -731,7 +731,7 @@ class AnnotationEditor:
             width=self.image_width,
             height=self.image_height,
             annotations=extract_annotations(self.current_segmentation_mask),
-            source=SOURCE_AUTO,
+            source=SOURCE_MASK,
         )
 
         manual_path = self._manual_path_for_image(self.current_image_path)
@@ -740,7 +740,7 @@ class AnnotationEditor:
         annotation_path.parent.mkdir(parents=True, exist_ok=True)
         write_annotation(annotation_path, payload)
 
-        self.current_source = SOURCE_AUTO
+        self.current_source = SOURCE_MASK
         self._set_current_manual_flag(False)
         self.current_annotations = self._load_annotation(self.current_image_path)
         self.selected_annotation_index = 0 if self.current_annotations else None

@@ -8,14 +8,20 @@ result, so the two paths cannot drift apart.
 Payload provenance
 ------------------
 
-Every payload carries a ``source`` field:
+Every payload carries a ``source`` field naming what produced it:
 
-- ``"auto"``   written by `generate_annotation`, freely regenerated from masks.
+- ``"tooltip-annotator/scripts/generate_annotation.py"`` (`SOURCE_MASK`)
+  written by `generate_annotation` (and by `annotation_editor`'s revert),
+  freely regenerated from masks.
 - ``"manual"`` written by `annotation_editor`, stored in the separate
   ``annotation-manual/`` tree and never overwritten by `generate_annotation`.
+- any other string: an automatic labeller outside this project, e.g. the
+  path of the detector checkpoint the parent repository relabelled with.
 
-Files written before this field existed have no ``source`` key;
-`annotation_source()` reads those as ``"auto"``.
+Files written before this field existed have no ``source`` key, and files
+written before the sources were spelled out say ``"auto"``; both came from
+the mask pipeline. `annotation_source()` returns the value as it is, with
+``"auto"`` for a missing key.
 """
 from __future__ import annotations
 
@@ -41,7 +47,9 @@ else:
 
 
 ANNOTATION_SUFFIX = ".json"
-SOURCE_AUTO = "auto"
+# The path, from the parent repository root, of the script that writes these.
+SOURCE_MASK = "tooltip-annotator/scripts/generate_annotation.py"
+SOURCE_LEGACY_AUTO = "auto"
 SOURCE_MANUAL = "manual"
 
 # Contours this small are almost always noise rather than a tool: drop a box
@@ -166,7 +174,7 @@ def build_auto_payload(mask_path: Path, mask: np.ndarray) -> dict[str, object]:
         width=width,
         height=height,
         annotations=extract_annotations(mask),
-        source=SOURCE_AUTO,
+        source=SOURCE_MASK,
     )
 
 
@@ -175,6 +183,5 @@ def write_annotation(output_path: Path, payload: dict[str, object]) -> None:
 
 
 def annotation_source(payload: dict[str, object]) -> str:
-    """Return the payload's provenance, defaulting to auto for legacy files."""
-    source = payload.get("source", SOURCE_AUTO)
-    return SOURCE_MANUAL if source == SOURCE_MANUAL else SOURCE_AUTO
+    """Return the payload's provenance, ``"auto"`` for files without one."""
+    return str(payload.get("source", SOURCE_LEGACY_AUTO))

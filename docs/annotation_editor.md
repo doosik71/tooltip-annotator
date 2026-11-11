@@ -317,7 +317,7 @@ JSON 구조는 다음과 같다.
 }
 ```
 
-`source`는 이 편집기가 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `Revert to Auto`로 되돌린 프레임은 `annotation`에만 `source: "auto"` 파일이 남고 `edited_at`은 붙지 않는다.
+`source`는 이 편집기가 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `Revert to Auto`로 되돌린 프레임은 `annotation`에만 `source: "tooltip-annotator/scripts/generate_annotation.py"` 파일이 남고 `edited_at`은 붙지 않는다.
 
 ### 문제 해결
 
@@ -395,7 +395,7 @@ GUI 환경이 없는 터미널 세션일 수 있다. 로컬 데스크톱 세션�
 - `dataset_locked`
   - 경로 옵션을 직접 지정해 실행했는지 여부. 참이면 `Dataset` 콤보를 비활성화한다
 - `current_source`
-  - 현재 프레임의 출처(`auto` / `manual`). `Revert to Auto` 버튼의 활성 여부에 쓰인다
+  - 현재 프레임이 `manual`인지 여부(`SOURCE_MANUAL` / 그 밖은 `SOURCE_MASK`). `Revert to Auto` 버튼의 활성 여부에만 쓰이며, `annotation` 파일에 적힌 실제 `source` 값과는 다를 수 있다
 - `manual_stems`
   - 현재 split에서 수동 보정본이 있는 파일 스템 집합. split을 열 때 `annotation-manual/{split}`를 한 번만 훑어서 만들고, 이후 저장/되돌리기 때 증분 갱신한다. 10만 장 규모 split에서도 프레임마다 파일 존재 여부를 확인하지 않기 위한 것이다
 
@@ -480,7 +480,7 @@ tip 핸들 hit 시 `tip` 모드가 활성화된다. 드래그 중 tip 좌표만 
 
 ### 되돌리기 정책
 
-`Revert to Auto`는 `annotation-manual`의 파일을 지우고, 메모리에 이미 올라와 있는 segmentation mask로 `tooltip.annotation.extract_annotations()`를 다시 호출해 `annotation`에 `source: "auto"` payload를 쓴다. `generate_annotation.py`가 쓰는 것과 같은 함수이므로 두 경로의 결과가 어긋날 수 없다.
+`Revert to Auto`는 `annotation-manual`의 파일을 지우고, 메모리에 이미 올라와 있는 segmentation mask로 `tooltip.annotation.extract_annotations()`를 다시 호출해 `annotation`에 `source: "tooltip-annotator/scripts/generate_annotation.py"` payload를 쓴다. `generate_annotation.py`가 쓰는 것과 같은 함수이므로 두 경로의 결과가 어긋날 수 없다.
 
 ### 현재 설계 제약
 

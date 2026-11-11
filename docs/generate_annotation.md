@@ -169,7 +169,7 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
   "image": "sample01_00000030.png",
   "width": 736,
   "height": 480,
-  "source": "auto",
+  "source": "tooltip-annotator/scripts/generate_annotation.py",
   "annotations": [
     {
       "bbox": {
@@ -191,14 +191,14 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
 
 - `image`: 원본 mask 파일 이름 (확장자 포함)
 - `width`, `height`: mask 이미지의 가로/세로 크기 (픽셀)
-- `source`: 레이블의 출처. 이 스크립트가 계산한 파일은 `auto`, `annotation_editor.py`가 저장한 파일은 `manual`이다
+- `source`: 레이블의 출처. 이 스크립트가 계산한 파일은 상위 저장소 루트 기준 스크립트 경로인 `tooltip-annotator/scripts/generate_annotation.py`, `annotation_editor.py`가 저장한 파일은 `manual`이다. 상위 저장소에서 탐지 모델로 다시 레이블한 파일에는 그 체크포인트 경로가 들어간다(예: `standalone/yolov8stooltip/data/model/erop/model.pt`)
 - `edited_at`: `source`가 `manual`인 파일에만 있는 수정 시각 (ISO 8601, 로컬 타임존)
 - `annotations`: mask에서 찾은 도구 영역 목록
   - `bbox.x`, `bbox.y`: bounding box의 좌상단 좌표
   - `bbox.width`, `bbox.height`: bounding box의 너비/높이
   - `tip.x`, `tip.y`: 추정된 도구 끝점 좌표
 
-`source` 필드가 도입되기 전에 생성된 파일에는 이 키가 없으며, 그 경우는 `auto`로 간주한다. 학습·평가 코드는 `annotations`만 읽으므로 이 메타데이터 필드가 늘어도 영향을 받지 않는다.
+`source` 필드가 도입되기 전에 생성된 파일에는 이 키가 없고, 출처를 구체적으로 적기 전에 생성된 파일은 `auto`라고 적혀 있다. 둘 다 이 스크립트(마스크 기반)가 만든 것이다. 학습·평가 코드는 `annotations`만 읽으므로 이 메타데이터 필드가 늘어도 영향을 받지 않는다.
 
 좌표는 모두 정수로 저장되며, JSON은 `indent=2`와 `sort_keys=True`로 직렬화되어 키가 알파벳 순으로 정렬된다. 도구 영역이 하나도 없는 mask는 `annotations`가 빈 배열인 JSON으로 저장된다.
 
@@ -309,11 +309,11 @@ bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 �
 - `build_payload(image_name, width, height, annotations, source)`
   - 메타와 annotation 리스트를 합쳐 payload를 만든다. `source`가 `manual`이면 `edited_at`을 덧붙인다.
 - `build_auto_payload(mask_path, mask)`
-  - mask에서 annotation을 추출해 `source="auto"` payload를 만든다.
+  - mask에서 annotation을 추출해 `source="tooltip-annotator/scripts/generate_annotation.py"`(`SOURCE_MASK`) payload를 만든다.
 - `write_annotation(output_path, payload)`
   - payload를 JSON으로 직렬화해 저장한다.
 - `annotation_source(payload)`
-  - payload의 출처를 반환한다. `source` 키가 없는 구버전 파일은 `auto`로 본다.
+  - payload의 `source` 값을 그대로 반환한다. `source` 키가 없는 구버전 파일은 `auto`로 본다.
 
 `scripts/generate_annotation.py`:
 
