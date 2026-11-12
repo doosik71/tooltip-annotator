@@ -1,6 +1,6 @@
-# `scripts/download_model.py`
+# `scripts/download-model.py`
 
-`scripts/download_model.py`는 Hugging Face Hub에서 프로젝트가 사용하는 MONAI 모델 파일을 내려받아 로컬 `temp/` 디렉터리에 준비하는 스크립트다.
+`scripts/download-model.py`는 Hugging Face Hub에서 프로젝트가 사용하는 MONAI 모델 파일을 내려받아 로컬 `temp/` 디렉터리에 준비하는 스크립트다.
 
 현재 구현은 범용 CLI가 아니라 프로젝트 전용 부트스트랩 스크립트이며, 아래 값을 코드에 고정해서 사용한다.
 
@@ -30,13 +30,13 @@
 프로젝트 루트에서 실행한다.
 
 ```bash
-python scripts/download_model.py
+python scripts/download-model.py
 ```
 
 프로젝트에서 `uv`를 사용 중이라면 다음처럼 실행해도 된다.
 
 ```bash
-uv run python scripts/download_model.py
+uv run python scripts/download-model.py
 ```
 
 ### 실행 결과
@@ -59,7 +59,7 @@ uv run python scripts/download_model.py
 
 ### 인증이 필요한 저장소를 사용할 때
 
-현재 스크립트는 `HF_TOKEN = None`으로 고정되어 있어 공개 저장소만 바로 사용할 수 있다. 비공개 저장소를 사용하려면 `scripts/download_model.py` 안의 `HF_TOKEN` 값을 토큰 문자열로 바꿔야 한다.
+현재 스크립트는 `HF_TOKEN = None`으로 고정되어 있어 공개 저장소만 바로 사용할 수 있다. 비공개 저장소를 사용하려면 `scripts/download-model.py` 안의 `HF_TOKEN` 값을 토큰 문자열로 바꿔야 한다.
 
 예시:
 
@@ -141,7 +141,11 @@ if local_model_path.exists():
 
 ```python
 from pathlib import Path
-from scripts.download_model import download_monai_model
+from importlib import import_module
+
+# 파일명에 "-"가 있어 import 문 대신 import_module로 불러온다.
+_m = import_module("scripts.download-model")
+download_monai_model = _m.download_monai_model
 
 path = download_monai_model(
     repo_id="MONAI/endoscopic_tool_segmentation",

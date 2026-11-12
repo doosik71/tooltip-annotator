@@ -62,45 +62,45 @@ def _count(directory: Path, extensions: set[str]) -> int:
 
 STEPS: list[dict] = [
     {
-        "id": "generate_progressive",
+        "id": "generate-progressive",
         "label": "1. Generate Progressive",
         "desc": "Convert source videos to progressive format",
-        "script": "generate_progressive",
+        "script": "generate-progressive",
         "editor": False,
     },
     {
-        "id": "generate_dataset",
+        "id": "generate-dataset",
         "label": "2. Generate Dataset",
         "desc": "Extract video frames into train/val/test images",
-        "script": "generate_dataset",
+        "script": "generate-dataset",
         "editor": False,
     },
     {
-        "id": "download_model",
+        "id": "download-model",
         "label": "3. Download Model",
         "desc": "Download MONAI segmentation model from HuggingFace",
-        "script": "download_model",
+        "script": "download-model",
         "editor": False,
     },
     {
-        "id": "generate_segmentation",
+        "id": "generate-segmentation",
         "label": "4. Generate Segmentation",
         "desc": "Generate binary segmentation mask per image",
-        "script": "generate_segmentation",
+        "script": "generate-segmentation",
         "editor": False,
     },
     {
-        "id": "generate_annotation",
+        "id": "generate-annotation",
         "label": "5. Generate Annotation",
         "desc": "Generate bbox/tip annotation JSON from masks",
-        "script": "generate_annotation",
+        "script": "generate-annotation",
         "editor": False,
     },
     {
-        "id": "annotation_editor",
+        "id": "annotation-editor",
         "label": "6. Annotation Editor",
         "desc": "Manually refine annotations (separate window)",
-        "script": "annotation_editor",
+        "script": "annotation-editor",
         "editor": True,
     },
 ]
@@ -108,14 +108,14 @@ STEPS: list[dict] = [
 
 def _step_progress(step_id: str, dataset: str) -> tuple[str, str]:
     """Return (status, detail) for the given dataset. status ∈ done | partial | pending | waiting | ready."""
-    if step_id == "download_model":
+    if step_id == "download-model":
         if (TEMP / "models" / "model.pt").exists():
             return "done", "model.pt"
         return "pending", "not downloaded"
 
     dataset_root = DATA / "dataset" / dataset
 
-    if step_id == "generate_progressive":
+    if step_id == "generate-progressive":
         src = _count(DATA / "dataset-src" / dataset, VIDEO_EXTS)
         dst = _count(dataset_root / "progressive", VIDEO_EXTS)
         if src == 0:
@@ -126,13 +126,13 @@ def _step_progress(step_id: str, dataset: str) -> tuple[str, str]:
             return "partial", f"{dst}/{src} videos"
         return "pending", f"0/{src} videos"
 
-    if step_id == "generate_dataset":
+    if step_id == "generate-dataset":
         counts = [_count(dataset_root / "images" / s, IMAGE_EXTS) for s in SPLITS]
         if sum(counts):
             return "done", "  ".join(f"{s}:{n}" for s, n in zip(SPLITS, counts))
         return "pending", "no images"
 
-    if step_id == "generate_segmentation":
+    if step_id == "generate-segmentation":
         img = [_count(dataset_root / "images" / s, IMAGE_EXTS) for s in SPLITS]
         seg = [_count(dataset_root / "segmentation" / s, MASK_EXTS) for s in SPLITS]
         detail = "  ".join(f"{s}:{n}" for s, n in zip(SPLITS, seg))
@@ -142,7 +142,7 @@ def _step_progress(step_id: str, dataset: str) -> tuple[str, str]:
             return "done", detail
         return "partial", detail
 
-    if step_id == "generate_annotation":
+    if step_id == "generate-annotation":
         seg = [_count(dataset_root / "segmentation" / s, MASK_EXTS) for s in SPLITS]
         ann = [_count(dataset_root / "annotation" / s, JSON_EXTS) for s in SPLITS]
         detail = "  ".join(f"{s}:{n}" for s, n in zip(SPLITS, ann))
@@ -152,7 +152,7 @@ def _step_progress(step_id: str, dataset: str) -> tuple[str, str]:
             return "done", detail
         return "partial", detail
 
-    if step_id == "annotation_editor":
+    if step_id == "annotation-editor":
         total = sum(_count(dataset_root / "annotation" / s, JSON_EXTS) for s in SPLITS)
         if total:
             return "ready", f"{total} annotations"
@@ -313,7 +313,7 @@ class PipelineApp:
         self._reload_datasets()
         dataset = self.dataset_var.get()
         for i, step in enumerate(STEPS):
-            requires_dataset = step["id"] != "download_model"
+            requires_dataset = step["id"] != "download-model"
             if requires_dataset and not dataset:
                 status, detail = "waiting", "no dataset selected"
                 self._rows[i]["btn"].config(state="disabled")
@@ -337,7 +337,7 @@ class PipelineApp:
     def _run(self, idx: int) -> None:
         step = STEPS[idx]
         dataset = self.dataset_var.get()
-        requires_dataset = step["id"] != "download_model"
+        requires_dataset = step["id"] != "download-model"
 
         if requires_dataset and not dataset:
             self._append_log("\n✗ No dataset selected.\n")
@@ -354,7 +354,7 @@ class PipelineApp:
         if step["editor"]:
             try:
                 subprocess.Popen(args, cwd=str(ROOT))
-                self._log_queue.put("annotation_editor launched\n")
+                self._log_queue.put("annotation-editor launched\n")
             except Exception as exc:
                 self._log_queue.put(f"✗ launch failed: {exc}\n")
             self._log_queue.put(None)

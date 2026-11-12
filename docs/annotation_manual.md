@@ -8,9 +8,9 @@
 
 | 산출물                   | 생성 주체               | 재생성 |
 | ------------------------ | ----------------------- | ------ |
-| `images/`                | `generate_dataset`      | 가능   |
-| `segmentation/`          | `generate_segmentation` | 가능   |
-| `annotation/`            | `generate_annotation`   | 가능   |
+| `images/`                | `generate-dataset`      | 가능   |
+| `segmentation/`          | `generate-segmentation` | 가능   |
+| `annotation/`            | `generate-annotation`   | 가능   |
 | **`annotation-manual/`** | **사람**                | **불가** |
 
 `annotation/`은 `annotation-manual`에 있는 프레임은 그대로 복사하고 나머지는 마스크에서 계산한 결과다. 즉 `annotation-manual`과 `segmentation`만 있으면 `annotation` 전체를 언제든 복원할 수 있다. 반대로 `annotation-manual`을 잃으면 그 작업은 사람이 다시 해야 한다.
@@ -70,10 +70,10 @@ git clone https://github.com/doosik71/cholec80-annotation-manual.git \
   data/dataset/cholec80/annotation-manual
 ```
 
-클론 후 `generate_annotation`을 한 번 실행하면 받아온 보정 내용이 `annotation/`에 반영된다.
+클론 후 `generate-annotation`을 한 번 실행하면 받아온 보정 내용이 `annotation/`에 반영된다.
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80
+python -m scripts.generate-annotation --dataset cholec80
 ```
 
 ### 일상 작업
@@ -113,7 +113,7 @@ git push -u origin main
 
 편집기 좌측 목록에서 보정된 프레임은 노란색으로 강조되므로, 보정했던 데이터셋을 열었는데 노란 줄이 하나도 없다면 클론을 빠뜨린 것이다.
 
-`generate_annotation`의 출력으로도 확인할 수 있다.
+`generate-annotation`의 출력으로도 확인할 수 있다.
 
 ```text
 train: saved=0, skipped=71032, manual=306 (restored=0)
@@ -123,11 +123,11 @@ train: saved=0, skipped=71032, manual=306 (restored=0)
 
 ### `annotation/`을 직접 고치지 않는다
 
-`annotation/`은 생성물이다. 직접 편집해도 다음 `generate_annotation` 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation_editor`로 한다.
+`annotation/`은 생성물이다. 직접 편집해도 다음 `generate-annotation` 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation-editor`로 한다.
 
 ### `annotation-manual` 디렉터리를 미리 만들지 않는다
 
-`git clone`은 비어 있지 않은 디렉터리를 거부한다. 편집기와 `generate_annotation`은 이 디렉터리를 미리 만들지 않으므로, 보정을 시작하기 전까지는 경로가 비어 있다.
+`git clone`은 비어 있지 않은 디렉터리를 거부한다. 편집기와 `generate-annotation`은 이 디렉터리를 미리 만들지 않으므로, 보정을 시작하기 전까지는 경로가 비어 있다.
 
 ### 백업 대상은 이 저장소뿐이다
 

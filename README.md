@@ -55,7 +55,7 @@ uv sync
     │   │   ├── train/
     │   │   ├── val/
     │   │   └── test/
-    │   └── screenshot/          # (선택) annotation_editor 스크린샷
+    │   └── screenshot/          # (선택) annotation-editor 스크린샷
     └── cholec80/
         └── ... (동일 구조)
 ```
@@ -66,10 +66,10 @@ uv sync
 
 | 디렉터리            | 쓰는 주체              | 내용                                               | 재생성 |
 | ------------------- | ---------------------- | -------------------------------------------------- | ------ |
-| `annotation-manual` | `annotation_editor`    | 사람이 보정한 프레임만                             | 불가   |
-| `annotation`        | `generate_annotation`  | 전체 프레임 = 자동 생성 결과에 수동 보정분을 덮어씀 | 가능   |
+| `annotation-manual` | `annotation-editor`    | 사람이 보정한 프레임만                             | 불가   |
+| `annotation`        | `generate-annotation`  | 전체 프레임 = 자동 생성 결과에 수동 보정분을 덮어씀 | 가능   |
 
-`generate_annotation`은 `annotation-manual`에 파일이 있는 프레임은 마스크를 다시 분석하지 않고 그 파일을 그대로 `annotation`에 복사한다. 따라서 segmentation을 다시 만든 뒤 `--overwrite`로 전체를 재생성해도 **수동 보정분은 사라지지 않는다**. `annotation` 디렉터리를 통째로 지우고 다시 만들어도 보정 내용은 `annotation-manual`에서 복원된다.
+`generate-annotation`은 `annotation-manual`에 파일이 있는 프레임은 마스크를 다시 분석하지 않고 그 파일을 그대로 `annotation`에 복사한다. 따라서 segmentation을 다시 만든 뒤 `--overwrite`로 전체를 재생성해도 **수동 보정분은 사라지지 않는다**. `annotation` 디렉터리를 통째로 지우고 다시 만들어도 보정 내용은 `annotation-manual`에서 복원된다.
 
 `annotation-manual`은 이 파이프라인에서 유일하게 스크립트로 다시 만들 수 없는 산출물이다. 그래서 **데이터셋별로 독립된 git 저장소**로 분리해 관리한다. 이 저장소의 `.gitignore`는 `data/` 전체를 제외하므로 두 저장소는 경로만 겹칠 뿐 서로를 참조하지 않는다(서브모듈이 아니다).
 
@@ -86,7 +86,7 @@ git clone https://github.com/doosik71/cholec80-annotation-manual.git \
 
 학습·평가 코드와 베이스라인들은 기존과 동일하게 `annotation` 하나만 읽으면 되며, 이 구조 때문에 바뀌는 부분은 없다.
 
-`data/dataset-src`는 읽기 전용 외부 원본이므로 스크립트가 그 안에 쓰지 않는다. `generate_progressive.py`의 출력(디인터레이스/재인코딩된 동영상)은 `data/dataset-src/<name>/progressive`가 아니라 `data/dataset/<name>/progressive`에 저장된다. `generate_dataset.py`는 `--dataset`만 주어졌을 때 `data/dataset/<name>/progressive`가 존재하고 비어있지 않으면 그것을, 없으면 `data/dataset-src/<name>`(원본)을 입력으로 사용한다. 즉 원본 자체가 이미 progressive 형식이라 디인터레이스가 필요 없는 데이터셋은 1단계를 건너뛰어도 된다.
+`data/dataset-src`는 읽기 전용 외부 원본이므로 스크립트가 그 안에 쓰지 않는다. `generate-progressive.py`의 출력(디인터레이스/재인코딩된 동영상)은 `data/dataset-src/<name>/progressive`가 아니라 `data/dataset/<name>/progressive`에 저장된다. `generate-dataset.py`는 `--dataset`만 주어졌을 때 `data/dataset/<name>/progressive`가 존재하고 비어있지 않으면 그것을, 없으면 `data/dataset-src/<name>`(원본)을 입력으로 사용한다. 즉 원본 자체가 이미 progressive 형식이라 디인터레이스가 필요 없는 데이터셋은 1단계를 건너뛰어도 된다.
 
 모델 파일 기본 위치는 다음과 같다(데이터셋과 무관한 공용 자원).
 
@@ -106,7 +106,7 @@ git clone https://github.com/doosik71/cholec80-annotation-manual.git \
 ### 1. 비디오를 progressive로 변환
 
 ```bash
-python scripts/generate_progressive.py --dataset cholec80
+python scripts/generate-progressive.py --dataset cholec80
 ```
 
 기본 입력은 `./data/dataset-src/cholec80`, 기본 출력은 `./data/dataset/cholec80/progressive`이다.
@@ -116,7 +116,7 @@ python scripts/generate_progressive.py --dataset cholec80
 ### 2. 데이터셋 이미지 생성
 
 ```bash
-python scripts/generate_dataset.py --dataset cholec80
+python scripts/generate-dataset.py --dataset cholec80
 ```
 
 기본 출력은 `./data/dataset/cholec80/images/{train,val,test}`이다.
@@ -126,7 +126,7 @@ python scripts/generate_dataset.py --dataset cholec80
 ### 3. segmentation 모델 다운로드
 
 ```bash
-python scripts/download_model.py
+python scripts/download-model.py
 ```
 
 문서: [docs/download_model.md](./docs/download_model.md)
@@ -136,7 +136,7 @@ python scripts/download_model.py
 GPU를 사용할 예정이면 먼저 환경 점검을 권장한다.
 
 ```bash
-python -m scripts.check_gpu --device cuda:0
+python -m scripts.check-cuda --device cuda:0
 ```
 
 이 스크립트는 다음을 확인한다.
@@ -151,7 +151,7 @@ python -m scripts.check_gpu --device cuda:0
 ### 5. segmentation mask 생성
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80
+python -m scripts.generate-segmentation --dataset cholec80
 ```
 
 기본 입력은 `./data/dataset/cholec80/images/{train,val,test}`이고, 기본 출력은 `./data/dataset/cholec80/segmentation/{train,val,test}`이다.
@@ -159,9 +159,9 @@ python -m scripts.generate_segmentation --dataset cholec80
 주요 옵션 예시:
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80 --device cuda:0
-python -m scripts.generate_segmentation --dataset cholec80 --device cpu
-python -m scripts.generate_segmentation --dataset cholec80 --overwrite
+python -m scripts.generate-segmentation --dataset cholec80 --device cuda:0
+python -m scripts.generate-segmentation --dataset cholec80 --device cpu
+python -m scripts.generate-segmentation --dataset cholec80 --overwrite
 ```
 
 문서: [docs/generate_segmentation.md](./docs/generate_segmentation.md)
@@ -169,7 +169,7 @@ python -m scripts.generate_segmentation --dataset cholec80 --overwrite
 ### 6. annotation JSON 자동 생성
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80
+python -m scripts.generate-annotation --dataset cholec80
 ```
 
 이 스크립트는 segmentation mask에서 contour를 찾고, 각 contour의 bounding box와 tool tip 좌표를 계산해 JSON으로 저장한다. 이미 `annotation-manual`에 수동 보정본이 있는 프레임은 마스크를 다시 분석하지 않고 그 보정본을 그대로 사용한다.
@@ -179,7 +179,7 @@ python -m scripts.generate_annotation --dataset cholec80
 마스크를 다시 생성한 뒤 자동 생성분만 갱신하려면 `--overwrite`를 준다. 수동 보정분은 그대로 유지된다.
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80 --overwrite
+python -m scripts.generate-annotation --dataset cholec80 --overwrite
 ```
 
 문서: [docs/generate_annotation.md](./docs/generate_annotation.md)
@@ -187,10 +187,10 @@ python -m scripts.generate_annotation --dataset cholec80 --overwrite
 ### 7. GUI 편집기로 annotation 수정
 
 ```bash
-python -m scripts.annotation_editor --dataset cholec80
+python -m scripts.annotation-editor --dataset cholec80
 ```
 
-`--dataset`을 생략하면 발견된 첫 번째 데이터셋이 자동으로 선택되므로, 인자 없이 `python -m scripts.annotation_editor`로 실행해도 된다.
+`--dataset`을 생략하면 발견된 첫 번째 데이터셋이 자동으로 선택되므로, 인자 없이 `python -m scripts.annotation-editor`로 실행해도 된다.
 
 편집기에서 가능한 작업:
 
@@ -225,26 +225,28 @@ git add -A && git commit -m "Correct 20 frames in train" && git push
 
 ## scripts 요약
 
-- `scripts/download_model.py`
+- `scripts/download-model.py`
   - Hugging Face Hub에서 MONAI segmentation 모델 다운로드
-- `scripts/generate_progressive.py`
+- `scripts/generate-progressive.py`
   - 원본 비디오를 ffmpeg로 디인터레이스 및 재인코딩
-- `scripts/generate_dataset.py`
+- `scripts/generate-dataset.py`
   - 비디오 프레임 추출 후 `train/val/test` 분할 이미지 생성
-- `scripts/check_gpu.py`
+- `scripts/check-cuda.py`
   - PyTorch CUDA/cuDNN 런타임 점검 및 문제 분석
-- `scripts/generate_segmentation.py`
+- `scripts/generate-segmentation.py`
   - 모델을 이용해 이미지별 binary segmentation mask 생성
-- `scripts/generate_annotation.py`
+- `scripts/generate-annotation.py`
   - segmentation mask로부터 bbox/tip annotation JSON 생성
-- `scripts/annotation_editor.py`
+- `scripts/annotation-editor.py`
   - annotation 수동 보정을 위한 GUI 편집기. 보정 결과를 `annotation-manual`에 보존한다
+- `scripts/count-dataset.py`
+  - 데이터셋별 `train/val/test` 프레임 수와 비율, split별 manual/자동 레이블 수와 비율을 콘솔에 출력 (`run count-dataset [--dataset <name>]`)
 - `scripts/pipeline.py`
   - 전체 파이프라인 단계를 실행하고 진행 상태를 보여주는 통합 GUI. 상단 `Dataset` 드롭다운으로 `data/dataset-src`/`data/dataset` 아래 발견된 데이터셋을 전환하며 실행/상태를 확인할 수 있다.
 - `tooltip/dataset_paths.py`
   - `--dataset` 옵션의 기본 경로 계산과 데이터셋 목록 조회를 담당하는 공용 모듈(직접 실행하지 않음)
 - `tooltip/annotation.py`
-  - mask에서 bbox/tip을 계산하고 annotation JSON payload를 만드는 공용 모듈. `generate_annotation.py`와 `annotation_editor.py`의 "자동 생성" 경로가 이 모듈을 공유한다(직접 실행하지 않음)
+  - mask에서 bbox/tip을 계산하고 annotation JSON payload를 만드는 공용 모듈. `generate-annotation.py`와 `annotation-editor.py`의 "자동 생성" 경로가 이 모듈을 공유한다(직접 실행하지 않음)
 
 ## 문서 목록
 

@@ -41,8 +41,8 @@ def annotation_dir(name: str) -> Path:
 def annotation_manual_dir(name: str) -> Path:
     """Hand-corrected annotations, the one artifact no script can regenerate.
 
-    `generate_annotation` reads this tree and copies each file it finds over
-    its generated counterpart in `annotation_dir()`; only `annotation_editor`
+    `generate-annotation` reads this tree and copies each file it finds over
+    its generated counterpart in `annotation_dir()`; only `annotation-editor`
     ever writes here.
     """
     return DATA_ROOT / "dataset" / name / "annotation-manual"
@@ -80,7 +80,7 @@ def resolve_path(
 
 
 def resolve_video_input(explicit: Path | None, dataset: str | None) -> Path:
-    """Resolve generate_dataset.py's video input directory.
+    """Resolve generate-dataset.py's video input directory.
 
     An explicit value always wins. Otherwise, prefer the dataset's progressive
     output if it exists and is non-empty (deinterlaced/reencoded videos),

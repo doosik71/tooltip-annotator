@@ -669,7 +669,7 @@ class AnnotationEditor:
     def _save_current_annotation(self) -> None:
         """Store the edit in annotation-manual/, then mirror it into annotation/.
 
-        annotation-manual/ is the original that `generate_annotation` must never
+        annotation-manual/ is the original that `generate-annotation` must never
         overwrite; annotation/ stays the single complete tree every consumer
         (training, baselines, dataset browser) already reads.
         """
@@ -1649,7 +1649,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Root directory where hand-corrected annotation JSON files are "
-            "kept. generate_annotation.py never overwrites these. Defaults to "
+            "kept. generate-annotation.py never overwrites these. Defaults to "
             "data/dataset/<dataset>/annotation-manual."
         ),
     )

@@ -1,10 +1,10 @@
-# `scripts/generate_annotation.py`
+# `scripts/generate-annotation.py`
 
-`scripts/generate_annotation.py`는 binary segmentation mask에서 도구(tool) 영역의 contour를 찾아, 각 영역의 bounding box와 tool tip 좌표를 계산하고 그 결과를 이미지별 annotation JSON 파일로 저장하는 스크립트다.
+`scripts/generate-annotation.py`는 binary segmentation mask에서 도구(tool) 영역의 contour를 찾아, 각 영역의 bounding box와 tool tip 좌표를 계산하고 그 결과를 이미지별 annotation JSON 파일로 저장하는 스크립트다.
 
 `--dataset <name>` 옵션을 주면 기본 입력은 `data/dataset/<name>/segmentation`, 기본 출력은 `data/dataset/<name>/annotation`이며, 입력과 출력 모두 `train`, `val`, `test` 세 분할 구조를 그대로 따른다.
 
-사람이 `annotation_editor.py`로 보정한 레이블은 `data/dataset/<name>/annotation-manual`에 따로 보관되며, 이 스크립트는 그 디렉터리를 **읽기만 한다**. 보정본이 있는 프레임은 마스크를 다시 분석하지 않고 보정본을 그대로 출력에 복사하므로, `--overwrite`로 전체를 재생성해도 수동 작업이 사라지지 않는다.
+사람이 `annotation-editor.py`로 보정한 레이블은 `data/dataset/<name>/annotation-manual`에 따로 보관되며, 이 스크립트는 그 디렉터리를 **읽기만 한다**. 보정본이 있는 프레임은 마스크를 다시 분석하지 않고 보정본을 그대로 출력에 복사하므로, `--overwrite`로 전체를 재생성해도 수동 작업이 사라지지 않는다.
 
 ## 사용자 문서
 
@@ -17,9 +17,9 @@ segmentation 단계에서 생성된 binary mask로부터 학습용 레이블을 
 
 이 프로젝트의 기본 작업 순서에서 이 스크립트의 위치는 다음과 같다.
 
-1. `scripts/generate_segmentation.py --dataset <name>`로 `data/dataset/<name>/segmentation` 준비
-2. `scripts/generate_annotation.py --dataset <name>`로 bbox/tip annotation JSON 자동 생성
-3. `scripts/annotation_editor.py --dataset <name>`로 생성된 annotation 수동 보정
+1. `scripts/generate-segmentation.py --dataset <name>`로 `data/dataset/<name>/segmentation` 준비
+2. `scripts/generate-annotation.py --dataset <name>`로 bbox/tip annotation JSON 자동 생성
+3. `scripts/annotation-editor.py --dataset <name>`로 생성된 annotation 수동 보정
 
 즉, 이 스크립트의 출력은 완성된 정답이 아니라 **수동 보정의 출발점이 되는 초안 레이블**이다.
 
@@ -41,7 +41,7 @@ segmentation 단계에서 생성된 binary mask로부터 학습용 레이블을 
 
 - `--overwrite`로 전체를 재생성해도 수동 보정분은 유지된다.
 - `annotation` 디렉터리를 통째로 삭제해도 보정 내용은 `annotation-manual`에서 복원된다.
-- `annotation` 쪽 파일을 직접 편집하면 다음 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation_editor.py`로 해야 한다.
+- `annotation` 쪽 파일을 직접 편집하면 다음 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation-editor.py`로 해야 한다.
 
 학습·평가 코드는 기존과 동일하게 `annotation` 하나만 읽는다. 어노테이션을 소비하는 쪽은 아무것도 바꿀 필요가 없다.
 
@@ -65,13 +65,13 @@ segmentation 단계에서 생성된 binary mask로부터 학습용 레이블을 
 프로젝트 루트에서 실행한다.
 
 ```bash
-python -m scripts.generate_annotation --dataset erop
+python -m scripts.generate-annotation --dataset erop
 ```
 
 `uv`를 사용 중이면 다음처럼 실행할 수 있다.
 
 ```bash
-uv run python -m scripts.generate_annotation --dataset erop
+uv run python -m scripts.generate-annotation --dataset erop
 ```
 
 `--dataset`을 주면 아래 경로를 사용한다.
@@ -99,25 +99,25 @@ uv run python -m scripts.generate_annotation --dataset erop
 `--dataset`으로 기본 경로를 사용해 annotation을 생성하는 예시:
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80
+python -m scripts.generate-annotation --dataset cholec80
 ```
 
 입력과 출력 경로를 직접 지정하는 예시(`--dataset` 기본값을 무시):
 
 ```bash
-python -m scripts.generate_annotation --input ./data/dataset/erop/segmentation --output ./data/dataset_v2/annotation
+python -m scripts.generate-annotation --input ./data/dataset/erop/segmentation --output ./data/dataset_v2/annotation
 ```
 
 자동 생성분만 모두 다시 생성하는 예시(수동 보정분은 유지):
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80 --overwrite
+python -m scripts.generate-annotation --dataset cholec80 --overwrite
 ```
 
 수동 보정분을 무시하고 순수한 자동 생성 결과만 얻는 예시(디버깅 용도. `--manual`을 빈 디렉터리로 돌린다):
 
 ```bash
-python -m scripts.generate_annotation --dataset cholec80 --overwrite \
+python -m scripts.generate-annotation --dataset cholec80 --overwrite \
   --manual ./temp/empty --output ./temp/annotation-auto-only
 ```
 
@@ -169,7 +169,7 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
   "image": "sample01_00000030.png",
   "width": 736,
   "height": 480,
-  "source": "tooltip-annotator/scripts/generate_annotation.py",
+  "source": "tooltip-annotator/scripts/generate-annotation.py",
   "annotations": [
     {
       "bbox": {
@@ -191,7 +191,7 @@ annotation 파일명은 입력 mask의 확장자만 `.json`으로 바꾼 형태�
 
 - `image`: 원본 mask 파일 이름 (확장자 포함)
 - `width`, `height`: mask 이미지의 가로/세로 크기 (픽셀)
-- `source`: 레이블의 출처. 이 스크립트가 계산한 파일은 상위 저장소 루트 기준 스크립트 경로인 `tooltip-annotator/scripts/generate_annotation.py`, `annotation_editor.py`가 저장한 파일은 `manual`이다. 상위 저장소에서 탐지 모델로 다시 레이블한 파일에는 그 체크포인트 경로가 들어간다(예: `standalone/yolov8stooltip/data/model/erop/model.pt`)
+- `source`: 레이블의 출처. 이 스크립트가 계산한 파일은 상위 저장소 루트 기준 스크립트 경로인 `tooltip-annotator/scripts/generate-annotation.py`, `annotation-editor.py`가 저장한 파일은 `manual`이다. 상위 저장소에서 탐지 모델로 다시 레이블한 파일에는 그 체크포인트 경로가 들어간다(예: `standalone/yolov8stooltip/data/model/erop/model.pt`)
 - `edited_at`: `source`가 `manual`인 파일에만 있는 수정 시각 (ISO 8601, 로컬 타임존)
 - `annotations`: mask에서 찾은 도구 영역 목록
   - `bbox.x`, `bbox.y`: bounding box의 좌상단 좌표
@@ -226,7 +226,7 @@ tip(끝점)은 다음 절차로 정한다.
 
 이는 수술 영상에서 도구가 보통 화면 가장자리에서 들어와 화면 중앙을 향하고, 도구의 끝(tip)이 화면 안쪽을 향한다는 가정을 반영한 것이다. 따라서 길쭉한 도구 영역에서는 자루 쪽이 아니라 안쪽 끝이 tip으로 잡히는 경향이 있다.
 
-이 추정은 휴리스틱이므로 도구가 짧거나, 화면 중앙을 가로지르거나, mask가 부정확한 경우에는 실제 tip과 다를 수 있다. 이런 경우를 보정하기 위한 단계가 `annotation_editor.py`다.
+이 추정은 휴리스틱이므로 도구가 짧거나, 화면 중앙을 가로지르거나, mask가 부정확한 경우에는 실제 tip과 다를 수 있다. 이런 경우를 보정하기 위한 단계가 `annotation-editor.py`다.
 
 ### annotation 정렬
 
@@ -270,7 +270,7 @@ mask 파일이 손상되었거나 OpenCV가 읽을 수 없는 형식이다. 해�
 
 #### tip 위치가 부정확한 경우
 
-tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation_editor.py`로 수동 보정한다.
+tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation-editor.py`로 수동 보정한다.
 
 #### 이미 생성한 JSON이 갱신되지 않는 경우
 
@@ -278,11 +278,11 @@ tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation_edit
 
 #### `--overwrite`를 줬는데도 특정 프레임이 갱신되지 않는 경우
 
-그 프레임에 수동 보정본이 있는 경우다. `annotation-manual/{split}/{stem}.json`이 존재하면 mask를 다시 분석하지 않는다. 의도한 동작이며, 자동 생성 결과로 되돌리려면 `annotation_editor.py`에서 해당 프레임을 열고 `Revert to Auto`를 누른다.
+그 프레임에 수동 보정본이 있는 경우다. `annotation-manual/{split}/{stem}.json`이 존재하면 mask를 다시 분석하지 않는다. 의도한 동작이며, 자동 생성 결과로 되돌리려면 `annotation-editor.py`에서 해당 프레임을 열고 `Revert to Auto`를 누른다.
 
 #### `annotation`을 직접 고쳤는데 다음 실행에서 되돌아간 경우
 
-수동 보정본이 있는 프레임의 출력은 매 실행마다 `annotation-manual`의 내용으로 맞춰진다(`restored` 개수로 보고된다). `annotation`은 생성물이므로 직접 편집하지 말고 `annotation_editor.py`를 사용한다.
+수동 보정본이 있는 프레임의 출력은 매 실행마다 `annotation-manual`의 내용으로 맞춰진다(`restored` 개수로 보고된다). `annotation`은 생성물이므로 직접 편집하지 말고 `annotation-editor.py`를 사용한다.
 
 ## 개발 문서
 
@@ -290,7 +290,7 @@ tip 추정은 휴리스틱이므로 항상 정확하지 않다. `annotation_edit
 
 스크립트는 다음 함수들로 구성된다.
 
-bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 있고, 스크립트는 파일 탐색과 skip/overwrite/override 정책만 담당한다. `annotation_editor.py`의 "자동으로 되돌리기" 기능이 같은 계산 코드를 써야 하므로 모듈로 분리되어 있다.
+bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 있고, 스크립트는 파일 탐색과 skip/overwrite/override 정책만 담당한다. `annotation-editor.py`의 "자동으로 되돌리기" 기능이 같은 계산 코드를 써야 하므로 모듈로 분리되어 있다.
 
 `tooltip/annotation.py`:
 
@@ -309,13 +309,13 @@ bbox/tip 계산과 payload 생성은 공용 모듈 `tooltip/annotation.py`에 �
 - `build_payload(image_name, width, height, annotations, source)`
   - 메타와 annotation 리스트를 합쳐 payload를 만든다. `source`가 `manual`이면 `edited_at`을 덧붙인다.
 - `build_auto_payload(mask_path, mask)`
-  - mask에서 annotation을 추출해 `source="tooltip-annotator/scripts/generate_annotation.py"`(`SOURCE_MASK`) payload를 만든다.
+  - mask에서 annotation을 추출해 `source="tooltip-annotator/scripts/generate-annotation.py"`(`SOURCE_MASK`) payload를 만든다.
 - `write_annotation(output_path, payload)`
   - payload를 JSON으로 직렬화해 저장한다.
 - `annotation_source(payload)`
   - payload의 `source` 값을 그대로 반환한다. `source` 키가 없는 구버전 파일은 `auto`로 본다.
 
-`scripts/generate_annotation.py`:
+`scripts/generate-annotation.py`:
 
 - `parse_args()`
   - CLI 인자(`--dataset`, `--input`, `--output`, `--manual`, `--overwrite`)를 정의하고 파싱한다.
@@ -462,4 +462,4 @@ mask = load_binary_mask(Path("./data/dataset/erop/segmentation/train/sample01_00
 annotations = extract_annotations(mask)
 ```
 
-`extract_annotations()`는 binary mask(numpy 배열)를 받아 annotation 리스트를 반환하므로, 파이프라인 외부에서도 bbox/tip 계산 로직만 따로 재사용하기 좋다. 이 함수들은 `scripts/generate_annotation.py`가 아니라 공용 모듈 `tooltip/annotation.py`에 있다.
+`extract_annotations()`는 binary mask(numpy 배열)를 받아 annotation 리스트를 반환하므로, 파이프라인 외부에서도 bbox/tip 계산 로직만 따로 재사용하기 좋다. 이 함수들은 `scripts/generate-annotation.py`가 아니라 공용 모듈 `tooltip/annotation.py`에 있다.

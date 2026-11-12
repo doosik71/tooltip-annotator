@@ -51,7 +51,7 @@ uv run python -m scripts.pipeline
 
 창은 위에서 아래로 네 영역으로 구성된다.
 
-1. **Dataset**: 데이터셋 선택 드롭다운. `data/dataset-src`와 `data/dataset` 하위 폴더 이름의 합집합이 정렬되어 표시된다. 하나도 없으면 안내 문구가 옆에 뜨고 `download_model`을 제외한 모든 단계의 `Run`/`Launch` 버튼이 비활성화된다.
+1. **Dataset**: 데이터셋 선택 드롭다운. `data/dataset-src`와 `data/dataset` 하위 폴더 이름의 합집합이 정렬되어 표시된다. 하나도 없으면 안내 문구가 옆에 뜨고 `download-model`을 제외한 모든 단계의 `Run`/`Launch` 버튼이 비활성화된다.
 2. **Pipeline Steps**: 6개 단계 목록. 각 단계는 상태 아이콘, 단계 이름, 진행 상세, 설명, 그리고 `Run`(또는 6단계는 `Launch`) 버튼으로 구성된다.
 3. **컨트롤 바**: `Refresh`, `Stop`, `Clear Log` 버튼.
 4. **Log**: 실행 중인 단계의 출력이 실시간으로 표시되는 검은 배경의 로그 창.
@@ -60,16 +60,16 @@ uv run python -m scripts.pipeline
 
 | 단계 | 이름                  | 실행 스크립트           | 동작 방식        |
 | ---- | --------------------- | ----------------------- | ---------------- |
-| 1    | Generate Progressive  | `generate_progressive`  | Run (로그 캡처)  |
-| 2    | Generate Dataset      | `generate_dataset`      | Run (로그 캡처)  |
-| 3    | Download Model        | `download_model`        | Run (로그 캡처)  |
-| 4    | Generate Segmentation | `generate_segmentation` | Run (로그 캡처)  |
-| 5    | Generate Annotation   | `generate_annotation`   | Run (로그 캡처)  |
-| 6    | Annotation Editor     | `annotation_editor`     | Launch (별도 창) |
+| 1    | Generate Progressive  | `generate-progressive`  | Run (로그 캡처)  |
+| 2    | Generate Dataset      | `generate-dataset`      | Run (로그 캡처)  |
+| 3    | Download Model        | `download-model`        | Run (로그 캡처)  |
+| 4    | Generate Segmentation | `generate-segmentation` | Run (로그 캡처)  |
+| 5    | Generate Annotation   | `generate-annotation`   | Run (로그 캡처)  |
+| 6    | Annotation Editor     | `annotation-editor`     | Launch (별도 창) |
 
 1~5단계는 GUI 내부에서 자식 프로세스로 실행되고 출력이 로그 창으로 흘러온다. 6단계는 GUI를 막지 않는 **별도 창**으로 편집기를 띄우며, 편집기 출력은 로그로 캡처하지 않는다.
 
-`download_model`(3단계)을 제외한 모든 단계는 선택된 데이터셋 이름을 `--dataset <name>` 인자로 붙여 실행된다. 모델은 데이터셋과 무관한 공용 자원이라 `download_model`은 인자 없이 실행된다.
+`download-model`(3단계)을 제외한 모든 단계는 선택된 데이터셋 이름을 `--dataset <name>` 인자로 붙여 실행된다. 모델은 데이터셋과 무관한 공용 자원이라 `download-model`은 인자 없이 실행된다.
 
 ### 상태 아이콘의 의미
 
@@ -90,7 +90,7 @@ uv run python -m scripts.pipeline
 
 ### 단계별 상태 판정 기준
 
-데이터셋이 선택되지 않은 상태(목록이 비어 있음)에서는 `download_model`을 제외한 모든 단계가 `waiting`/"no dataset selected"로 표시되고 버튼이 비활성화된다.
+데이터셋이 선택되지 않은 상태(목록이 비어 있음)에서는 `download-model`을 제외한 모든 단계가 `waiting`/"no dataset selected"로 표시되고 버튼이 비활성화된다.
 
 - **1. Generate Progressive**
   - 입력: `data/dataset-src/<dataset>`의 비디오 수, 출력: `data/dataset/<dataset>/progressive`의 비디오 수.
@@ -123,13 +123,13 @@ uv run python -m scripts.pipeline
 
 ### `--dataset` 외에는 기본 옵션으로만 실행된다는 점 (중요)
 
-이 GUI는 각 단계를 선택된 데이터셋의 `--dataset <name>`만 붙여 실행한다(`download_model`은 그마저도 없이 실행). 그 외에는 각 스크립트의 **기본 옵션**으로만 동작하며, `--overwrite`나 `--device`, 커스텀 `--input`/`--output` 같은 옵션을 GUI에서 지정할 수 없다.
+이 GUI는 각 단계를 선택된 데이터셋의 `--dataset <name>`만 붙여 실행한다(`download-model`은 그마저도 없이 실행). 그 외에는 각 스크립트의 **기본 옵션**으로만 동작하며, `--overwrite`나 `--device`, 커스텀 `--input`/`--output` 같은 옵션을 GUI에서 지정할 수 없다.
 
-특히 `generate_segmentation`과 `generate_annotation`은 `--overwrite` 없이 실행되므로, **이미 결과 파일이 있으면 건너뛴다**. 즉 이 GUI로는 기존 mask/annotation을 다시 생성(덮어쓰기)할 수 없다. 결과를 강제로 재생성하려면 터미널에서 직접 옵션을 지정해 실행해야 한다.
+특히 `generate-segmentation`과 `generate-annotation`은 `--overwrite` 없이 실행되므로, **이미 결과 파일이 있으면 건너뛴다**. 즉 이 GUI로는 기존 mask/annotation을 다시 생성(덮어쓰기)할 수 없다. 결과를 강제로 재생성하려면 터미널에서 직접 옵션을 지정해 실행해야 한다.
 
 ```bash
-uv run python -m scripts.generate_segmentation --dataset erop --overwrite
-uv run python -m scripts.generate_annotation --dataset erop --overwrite
+uv run python -m scripts.generate-segmentation --dataset erop --overwrite
+uv run python -m scripts.generate-annotation --dataset erop --overwrite
 ```
 
 마찬가지로 디바이스 지정(`--device`)이나 경로 변경 등도 GUI에서는 불가능하며, CLI 실행이 필요하다.
@@ -169,7 +169,7 @@ uv run python -m scripts.generate_annotation --dataset erop --overwrite
 - `STEPS`
   - 6개 단계의 메타데이터(id, label, desc, script, editor) 리스트.
 - `_step_progress(step_id, dataset)`
-  - 선택된 데이터셋 기준으로 단계별 `(status, detail)`을 계산한다(`download_model`은 `dataset`을 무시).
+  - 선택된 데이터셋 기준으로 단계별 `(status, detail)`을 계산한다(`download-model`은 `dataset`을 무시).
 - `_STATUS_UNICODE` / `_STATUS_ASCII`
   - 상태별 (아이콘, 색) 매핑. 심볼 폰트 유무에 따라 선택된다.
 - `PipelineApp`
@@ -178,9 +178,9 @@ uv run python -m scripts.generate_annotation --dataset erop --overwrite
     - `_build_ui()`: 데이터셋 드롭다운, 단계 행, 컨트롤 바, 로그 창을 생성한다.
     - `_reload_datasets()`: `tooltip.dataset_paths.list_datasets()`로 드롭다운 값을 다시 채우고, 현재 선택이 목록에 없으면 첫 번째 항목으로 되돌린다.
     - `_on_dataset_changed(event)`: 드롭다운 선택이 바뀌면 `_refresh()`를 호출한다.
-    - `_refresh()`: 데이터셋 목록을 다시 불러온 뒤 각 단계 상태를 다시 계산해 표시한다. 데이터셋이 없으면 `download_model` 외 모든 단계를 `waiting`으로 표시하고 버튼을 비활성화한다.
+    - `_refresh()`: 데이터셋 목록을 다시 불러온 뒤 각 단계 상태를 다시 계산해 표시한다. 데이터셋이 없으면 `download-model` 외 모든 단계를 `waiting`으로 표시하고 버튼을 비활성화한다.
     - `_set_running(idx)`: 실행 중 단계를 표시하고 버튼 상태를 토글한다.
-    - `_run(idx)`: 해당 단계를 선택된 데이터셋으로 실행한다(`download_model` 제외 `--dataset <name>` 전달, 편집기는 별도 창, 나머지는 작업 스레드).
+    - `_run(idx)`: 해당 단계를 선택된 데이터셋으로 실행한다(`download-model` 제외 `--dataset <name>` 전달, 편집기는 별도 창, 나머지는 작업 스레드).
     - `_stop()`: 실행 중 프로세스를 종료한다.
     - `_poll()`: 로그 큐를 비우고 100ms마다 자신을 다시 예약한다.
     - `_append_log(text)` / `_clear_log()`: 로그 출력/초기화.
@@ -203,7 +203,7 @@ TEMP = ROOT / "temp"
 
 #### 2. 단계 실행 방식 (Run vs Launch)
 
-`_run(idx)`는 먼저 `STEPS[idx]["id"] != "download_model"`이면 데이터셋이 선택되어 있는지 확인하고(없으면 로그에 에러만 남기고 종료), `[sys.executable, "-m", f"scripts.{step['script']}"]`을 기본 인자로 구성한 뒤 `--dataset <name>`을 붙인다. `bin/` 런처를 거치지 않고 현재 GUI 프로세스와 같은 인터프리터로 직접 모듈을 실행하므로 `tooltip` 같은 프로젝트 루트의 패키지도 그대로 import된다. 이후 `STEPS[idx]["editor"]` 값으로 분기한다.
+`_run(idx)`는 먼저 `STEPS[idx]["id"] != "download-model"`이면 데이터셋이 선택되어 있는지 확인하고(없으면 로그에 에러만 남기고 종료), `[sys.executable, "-m", f"scripts.{step['script']}"]`을 기본 인자로 구성한 뒤 `--dataset <name>`을 붙인다. `bin/` 런처를 거치지 않고 현재 GUI 프로세스와 같은 인터프리터로 직접 모듈을 실행하므로 `tooltip` 같은 프로젝트 루트의 패키지도 그대로 import된다. 이후 `STEPS[idx]["editor"]` 값으로 분기한다.
 
 - **편집기(editor=True)**: `subprocess.Popen(args, cwd=ROOT)`로 별도 창을 띄우고, 출력은 캡처하지 않는다. 곧바로 큐에 `None`(완료 신호)을 넣어 GUI 잠금을 해제한다.
 - **일반 단계(editor=False)**: 데몬 스레드에서 `subprocess.Popen(args, ...)`을 `stdout=PIPE, stderr=STDOUT, text=True, bufsize=1`로 실행하고, 출력 라인을 하나씩 `_log_queue`에 넣는다. 프로세스가 끝나면 종료 코드에 따라 `✓ done`/`✗ error` 메시지와 완료 신호(`None`)를 큐에 넣는다.
@@ -277,7 +277,7 @@ from scripts.pipeline import _step_progress
 from tooltip.dataset_paths import list_datasets
 
 dataset = list_datasets()[0]
-for step_id in ("generate_dataset", "generate_segmentation", "generate_annotation"):
+for step_id in ("generate-dataset", "generate-segmentation", "generate-annotation"):
     status, detail = _step_progress(step_id, dataset)
     print(step_id, status, detail)
 ```

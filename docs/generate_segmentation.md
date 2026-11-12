@@ -1,6 +1,6 @@
-# `scripts/generate_segmentation.py`
+# `scripts/generate-segmentation.py`
 
-`scripts/generate_segmentation.py`는 다운로드한 MONAI segmentation 모델로 데이터셋 이미지마다 binary segmentation mask를 추론해 PNG로 저장하는 스크립트다.
+`scripts/generate-segmentation.py`는 다운로드한 MONAI segmentation 모델로 데이터셋 이미지마다 binary segmentation mask를 추론해 PNG로 저장하는 스크립트다.
 
 `--dataset <name>` 옵션을 주면 기본 입력은 `data/dataset/<name>/images`, 기본 출력은 `data/dataset/<name>/segmentation`이며, 입력과 출력 모두 `train`, `val`, `test` 세 분할 구조를 그대로 따른다.
 
@@ -8,15 +8,15 @@
 
 ### 목적
 
-`generate_dataset.py`로 만든 이미지 데이터셋의 각 프레임에 대해, 학습된 모델로 도구(tool) 영역을 분할한 binary mask를 생성한다. 이 mask는 다음 단계인 `generate_annotation.py`의 입력이 된다.
+`generate-dataset.py`로 만든 이미지 데이터셋의 각 프레임에 대해, 학습된 모델로 도구(tool) 영역을 분할한 binary mask를 생성한다. 이 mask는 다음 단계인 `generate-annotation.py`의 입력이 된다.
 
 이 프로젝트의 기본 작업 순서에서 이 스크립트의 위치는 다음과 같다.
 
-1. `scripts/generate_dataset.py --dataset <name>`로 `data/dataset/<name>/images` 준비
-2. `scripts/download_model.py`로 `./temp/models/model.pt` 준비(데이터셋과 무관한 공용 모델)
-3. (GPU 사용 시) `scripts/check_gpu.py`로 CUDA/cuDNN 환경 점검
-4. `scripts/generate_segmentation.py --dataset <name>`로 mask 생성
-5. `scripts/generate_annotation.py --dataset <name>`로 bbox/tip annotation 생성
+1. `scripts/generate-dataset.py --dataset <name>`로 `data/dataset/<name>/images` 준비
+2. `scripts/download-model.py`로 `./temp/models/model.pt` 준비(데이터셋과 무관한 공용 모델)
+3. (GPU 사용 시) `scripts/check-cuda.py`로 CUDA/cuDNN 환경 점검
+4. `scripts/generate-segmentation.py --dataset <name>`로 mask 생성
+5. `scripts/generate-annotation.py --dataset <name>`로 bbox/tip annotation 생성
 
 ### 실행 전 요구 사항
 
@@ -42,13 +42,13 @@
 프로젝트 루트에서 실행한다.
 
 ```bash
-python -m scripts.generate_segmentation --dataset erop
+python -m scripts.generate-segmentation --dataset erop
 ```
 
 `uv`를 사용 중이면 다음처럼 실행할 수 있다.
 
 ```bash
-uv run python -m scripts.generate_segmentation --dataset erop
+uv run python -m scripts.generate-segmentation --dataset erop
 ```
 
 `--dataset`을 주면 아래를 사용한다.
@@ -79,31 +79,31 @@ uv run python -m scripts.generate_segmentation --dataset erop
 `--dataset`으로 기본 경로를 사용해 mask를 생성하는 예시:
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80
+python -m scripts.generate-segmentation --dataset cholec80
 ```
 
 특정 GPU를 지정하는 예시:
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80 --device cuda:0
+python -m scripts.generate-segmentation --dataset cholec80 --device cuda:0
 ```
 
 CPU로 추론하는 예시:
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80 --device cpu
+python -m scripts.generate-segmentation --dataset cholec80 --device cpu
 ```
 
 기존 mask를 모두 다시 생성하는 예시:
 
 ```bash
-python -m scripts.generate_segmentation --dataset cholec80 --overwrite
+python -m scripts.generate-segmentation --dataset cholec80 --overwrite
 ```
 
 입력/출력/모델 경로를 직접 지정하는 예시(`--dataset` 기본값을 무시):
 
 ```bash
-python -m scripts.generate_segmentation \
+python -m scripts.generate-segmentation \
     --input ./data/dataset/erop/images \
     --output ./data/dataset_v2/segmentation \
     --model ./temp/models/model.pt
@@ -165,7 +165,7 @@ mask 파일명은 입력 이미지의 확장자만 `.png`로 바꾼 형태다.
 - `--device`를 주면 그 값을 그대로 사용한다(`cpu`, `cuda`, `cuda:0` 등).
 - 주지 않으면 `torch.cuda.is_available()`로 자동 판단해 가능하면 `cuda:0`, 아니면 `cpu`를 쓴다.
 
-GPU 환경이 의심스러우면 먼저 `python -m scripts.check_gpu --device cuda:0`으로 CUDA/cuDNN 상태를 점검하는 것을 권장한다.
+GPU 환경이 의심스러우면 먼저 `python -m scripts.check-cuda --device cuda:0`으로 CUDA/cuDNN 상태를 점검하는 것을 권장한다.
 
 ### 종료 및 출력
 
@@ -181,7 +181,7 @@ GPU 환경이 의심스러우면 먼저 `python -m scripts.check_gpu --device cu
 
 #### `Input directory does not exist` 에러
 
-`--input` 경로가 실제로 존재하는지 확인한다. `--dataset`만 썼다면 `data/dataset/<dataset>/images`가 준비되어 있어야 한다(`generate_dataset.py`를 먼저 실행).
+`--input` 경로가 실제로 존재하는지 확인한다. `--dataset`만 썼다면 `data/dataset/<dataset>/images`가 준비되어 있어야 한다(`generate-dataset.py`를 먼저 실행).
 
 #### `Either --dataset or --input must be provided.` 에러
 
@@ -189,11 +189,11 @@ GPU 환경이 의심스러우면 먼저 `python -m scripts.check_gpu --device cu
 
 #### `Model checkpoint does not exist` 에러
 
-`--model` 경로에 체크포인트가 없다. `python scripts/download_model.py`로 모델을 먼저 받는다.
+`--model` 경로에 체크포인트가 없다. `python scripts/download-model.py`로 모델을 먼저 받는다.
 
 #### `Split directory does not exist` 에러
 
-입력 디렉터리 아래에 `train`, `val`, `test` 세 폴더가 모두 있어야 한다. `generate_dataset.py`를 먼저 정상 실행했는지 확인한다.
+입력 디렉터리 아래에 `train`, `val`, `test` 세 폴더가 모두 있어야 한다. `generate-dataset.py`를 먼저 정상 실행했는지 확인한다.
 
 #### `Failed to read image` / `Failed to write segmentation mask` 에러
 
@@ -201,7 +201,7 @@ GPU 환경이 의심스러우면 먼저 `python -m scripts.check_gpu --device cu
 
 #### CUDA out of memory / GPU 관련 오류
 
-`--device cpu`로 전환해 추론하거나, GPU 환경을 점검한다(`scripts/check_gpu.py`).
+`--device cpu`로 전환해 추론하거나, GPU 환경을 점검한다(`scripts/check-cuda.py`).
 
 #### 이미 생성한 mask가 갱신되지 않는 경우
 
@@ -299,7 +299,7 @@ MODEL_INPUT_WIDTH = 736
 MODEL_INPUT_HEIGHT = 480
 ```
 
-`cv2.resize`는 `(width, height)` 순서를 받으므로, 실제 리사이즈는 `(MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT) = (736, 480)`, 즉 **너비 736 × 높이 480**(가로로 긴 형태)으로 수행된다. 이는 `generate_dataset.py`의 기본 출력 이미지 크기(너비 736 × 높이 480)와 같은 방향이다.
+`cv2.resize`는 `(width, height)` 순서를 받으므로, 실제 리사이즈는 `(MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT) = (736, 480)`, 즉 **너비 736 × 높이 480**(가로로 긴 형태)으로 수행된다. 이는 `generate-dataset.py`의 기본 출력 이미지 크기(너비 736 × 높이 480)와 같은 방향이다.
 
 추론 결과 mask는 `postprocess_mask()`에서 다시 **원본 이미지 크기**로 복원되므로 최종 mask의 해상도는 입력 이미지와 같다. 새 모델이나 다른 해상도의 데이터셋을 쓸 때는 이 상수와 입력 해상도의 정합성을 확인하는 것이 좋다.
 
@@ -373,7 +373,11 @@ skip은 두 단계로 동작한다.
 
 ```python
 from pathlib import Path
-from scripts.generate_segmentation import build_model, infer_image, resolve_device
+from importlib import import_module
+
+# 파일명에 "-"가 있어 import 문 대신 import_module로 불러온다.
+_m = import_module("scripts.generate-segmentation")
+build_model, infer_image, resolve_device = _m.build_model, _m.infer_image, _m.resolve_device
 
 device = resolve_device("cuda:0")
 model = build_model(Path("./temp/models/model.pt"), device)

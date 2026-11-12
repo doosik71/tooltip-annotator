@@ -1,6 +1,6 @@
-# `scripts/generate_progressive.py`
+# `scripts/generate-progressive.py`
 
-`scripts/generate_progressive.py`는 데이터셋 원본 동영상 디렉터리를 순회하면서 `ffmpeg`로 디인터레이스 및 재인코딩을 수행하고, 결과를 데이터셋별 progressive 디렉터리에 저장하는 스크립트다.
+`scripts/generate-progressive.py`는 데이터셋 원본 동영상 디렉터리를 순회하면서 `ffmpeg`로 디인터레이스 및 재인코딩을 수행하고, 결과를 데이터셋별 progressive 디렉터리에 저장하는 스크립트다.
 
 기본 입력은 `./data/dataset-src/<dataset>`, 기본 출력은 `./data/dataset/<dataset>/progressive`이며, `--dataset` 옵션으로 데이터셋 이름만 주면 이 두 경로가 자동으로 계산된다.
 
@@ -15,7 +15,7 @@
 
 인터레이스가 포함될 수 있는 원본 동영상을 progressive 형식에 맞게 정리해 후속 프레임 추출 작업에 사용하기 위한 전처리 스크립트다.
 
-이 프로젝트 기준으로는 `scripts/generate_dataset.py`를 실행하기 전에 데이터셋별 progressive 입력 영상을 준비하는 단계로 볼 수 있다. 다만 원본 동영상이 이미 progressive 형식이라 디인터레이스가 필요 없는 데이터셋이라면, 이 단계를 건너뛰고 `generate_dataset.py --dataset <name>`을 바로 실행해도 된다(자세한 내용은 [docs/generate_dataset.md](./generate_dataset.md)의 입력 fallback 설명 참고).
+이 프로젝트 기준으로는 `scripts/generate-dataset.py`를 실행하기 전에 데이터셋별 progressive 입력 영상을 준비하는 단계로 볼 수 있다. 다만 원본 동영상이 이미 progressive 형식이라 디인터레이스가 필요 없는 데이터셋이라면, 이 단계를 건너뛰고 `generate-dataset.py --dataset <name>`을 바로 실행해도 된다(자세한 내용은 [docs/generate_dataset.md](./generate_dataset.md)의 입력 fallback 설명 참고).
 
 ### 실행 전 요구 사항
 
@@ -31,13 +31,13 @@
 프로젝트 루트에서 실행한다.
 
 ```bash
-python scripts/generate_progressive.py --dataset erop
+python scripts/generate-progressive.py --dataset erop
 ```
 
 `uv`를 사용 중이라면 다음처럼 실행할 수 있다.
 
 ```bash
-uv run python scripts/generate_progressive.py --dataset erop
+uv run python scripts/generate-progressive.py --dataset erop
 ```
 
 ### CLI 옵션
@@ -56,19 +56,19 @@ uv run python scripts/generate_progressive.py --dataset erop
 `--dataset`만으로 기본 경로를 사용하는 예시:
 
 ```bash
-python scripts/generate_progressive.py --dataset cholec80
+python scripts/generate-progressive.py --dataset cholec80
 ```
 
 경로를 직접 지정하는 예시(다른 데이터셋 컨벤션을 따르지 않는 임시 작업 등):
 
 ```bash
-python scripts/generate_progressive.py --input ./data/tmp_videos --output ./data/tmp_progressive
+python scripts/generate-progressive.py --input ./data/tmp_videos --output ./data/tmp_progressive
 ```
 
 `--dataset`과 `--output`을 함께 줘서 출력 위치만 바꾸는 예시:
 
 ```bash
-python scripts/generate_progressive.py --dataset erop --output ./data/dataset/erop_v2/progressive
+python scripts/generate-progressive.py --dataset erop --output ./data/dataset/erop_v2/progressive
 ```
 
 ### 입력 대상 파일
@@ -131,10 +131,10 @@ ffmpeg -loglevel error -i INPUT -vf yadif -c:v libx264 -crf 20 -c:a copy OUTPUT
 
 ### 후속 작업과의 연결
 
-이 스크립트의 기본 출력 경로는 `data/dataset/<dataset>/progressive`이고, `scripts/generate_dataset.py`가 `--dataset`만으로 입력 경로를 계산할 때 이 폴더가 존재하고 비어있지 않으면 우선 사용한다. 따라서 일반적인 작업 순서는 다음과 같다.
+이 스크립트의 기본 출력 경로는 `data/dataset/<dataset>/progressive`이고, `scripts/generate-dataset.py`가 `--dataset`만으로 입력 경로를 계산할 때 이 폴더가 존재하고 비어있지 않으면 우선 사용한다. 따라서 일반적인 작업 순서는 다음과 같다.
 
-1. `scripts/generate_progressive.py --dataset <name>`로 전처리 영상 생성
-2. `scripts/generate_dataset.py --dataset <name>`로 프레임 추출 및 `train/val/test` 분할
+1. `scripts/generate-progressive.py --dataset <name>`로 전처리 영상 생성
+2. `scripts/generate-dataset.py --dataset <name>`로 프레임 추출 및 `train/val/test` 분할
 
 ### 문제 해결
 
@@ -176,7 +176,7 @@ sudo apt install ffmpeg
 
 ### 파일 구조
 
-스크립트는 다른 5개 스크립트(`generate_dataset.py` 등)와 동일한 `parse_args()` → `validate_args()` → `main() -> int` 구조를 따른다.
+스크립트는 다른 5개 스크립트(`generate-dataset.py` 등)와 동일한 `parse_args()` → `validate_args()` → `main() -> int` 구조를 따른다.
 
 - `parse_args()`
   - CLI 인자(`--dataset`, `--input`, `--output`)를 정의하고 파싱한다.
@@ -238,7 +238,7 @@ if output_file.exists():
 
 #### 6. progressive 변환의 의미
 
-스크립트 이름은 `generate_progressive`지만, 내부적으로는 컨테이너 포맷 자체를 "progressive 포맷"으로 바꾸는 전용 로직이 있는 것이 아니라 `yadif` 디인터레이스와 H.264 재인코딩을 통해 후속 처리에 적합한 영상을 만드는 방식이다.
+스크립트 이름은 `generate-progressive`지만, 내부적으로는 컨테이너 포맷 자체를 "progressive 포맷"으로 바꾸는 전용 로직이 있는 것이 아니라 `yadif` 디인터레이스와 H.264 재인코딩을 통해 후속 처리에 적합한 영상을 만드는 방식이다.
 
 ### 현재 설계 제약
 
@@ -262,7 +262,11 @@ if output_file.exists():
 `convert_to_progressive()`는 CLI 계층과 분리되어 있어 직접 import해서 호출할 수 있다.
 
 ```python
-from scripts.generate_progressive import convert_to_progressive
+from importlib import import_module
+
+# 파일명에 "-"가 있어 import 문 대신 import_module로 불러온다.
+_m = import_module("scripts.generate-progressive")
+convert_to_progressive = _m.convert_to_progressive
 
 convert_to_progressive(Path("./data/dataset-src/erop"), Path("./data/dataset/erop/progressive"))
 ```

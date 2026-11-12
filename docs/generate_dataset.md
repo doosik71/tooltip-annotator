@@ -1,6 +1,6 @@
-# `scripts/generate_dataset.py`
+# `scripts/generate-dataset.py`
 
-`scripts/generate_dataset.py`는 동영상 파일에서 일정 간격으로 프레임을 추출하고, 각 프레임을 `train`, `val`, `test` 세 분할로 나누어 PNG 이미지 데이터셋을 만드는 스크립트다.
+`scripts/generate-dataset.py`는 동영상 파일에서 일정 간격으로 프레임을 추출하고, 각 프레임을 `train`, `val`, `test` 세 분할로 나누어 PNG 이미지 데이터셋을 만드는 스크립트다.
 
 분할 단위는 `--split-unit`으로 고른다. `frame`(기본값)은 비디오마다 그 비디오의 프레임을 독립적으로 나누므로 모든 비디오가 세 분할에 모두 기여하고, 시간적으로 인접한 프레임이 서로 다른 분할에 들어간다. `video`는 비디오 한 편을 통째로 한 분할에 배정하므로 **어떤 비디오도 두 분할에 걸치지 않는다**.
 
@@ -14,8 +14,8 @@
 
 이 프로젝트의 기본 작업 순서는 보통 다음과 같다.
 
-1. `scripts/generate_progressive.py --dataset <name>`로 `data/dataset/<name>/progressive` 준비(원본이 이미 progressive 형식이면 생략 가능)
-2. `scripts/generate_dataset.py --dataset <name>`로 프레임 추출 및 데이터셋 생성
+1. `scripts/generate-progressive.py --dataset <name>`로 `data/dataset/<name>/progressive` 준비(원본이 이미 progressive 형식이면 생략 가능)
+2. `scripts/generate-dataset.py --dataset <name>`로 프레임 추출 및 데이터셋 생성
 
 ### 실행 전 요구 사항
 
@@ -35,13 +35,13 @@
 프로젝트 루트에서 실행한다.
 
 ```bash
-python scripts/generate_dataset.py --dataset erop
+python scripts/generate-dataset.py --dataset erop
 ```
 
 `uv`를 사용 중이면 다음처럼 실행할 수 있다.
 
 ```bash
-uv run python scripts/generate_dataset.py --dataset erop
+uv run python scripts/generate-dataset.py --dataset erop
 ```
 
 `--dataset`을 주면 아래 경로를 사용한다.
@@ -86,31 +86,31 @@ uv run python scripts/generate_dataset.py --dataset erop
 `--dataset`으로 기본 경로를 사용해 데이터셋을 생성하는 예시:
 
 ```bash
-python scripts/generate_dataset.py --dataset cholec80
+python scripts/generate-dataset.py --dataset cholec80
 ```
 
 프레임을 더 촘촘히 추출하고 출력 해상도를 바꾸는 예시:
 
 ```bash
-python scripts/generate_dataset.py --dataset cholec80 --frame 5 --width 1280 --height 720
+python scripts/generate-dataset.py --dataset cholec80 --frame 5 --width 1280 --height 720
 ```
 
 입력과 출력 경로를 직접 지정하는 예시(`--dataset` 기본값을 무시):
 
 ```bash
-python scripts/generate_dataset.py --input ./data/dataset/erop/progressive --output ./data/dataset_v2/images
+python scripts/generate-dataset.py --input ./data/dataset/erop/progressive --output ./data/dataset_v2/images
 ```
 
 분할 비율을 바꾸는 예시:
 
 ```bash
-python scripts/generate_dataset.py --dataset cholec80 --train 70 --val 15 --test 15
+python scripts/generate-dataset.py --dataset cholec80 --train 70 --val 15 --test 15
 ```
 
 비디오가 분할에 걸치지 않게 나누는 예시:
 
 ```bash
-python scripts/generate_dataset.py --dataset cholec80 --split-unit video --train 40 --val 10 --test 50
+python scripts/generate-dataset.py --dataset cholec80 --split-unit video --train 40 --val 10 --test 50
 ```
 
 Cholec80 80편에 이 비율을 적용하면 편수가 `32 / 8 / 40`으로 나뉘고, 파일명 정렬 순서 그대로 배정되므로 `video01–32` train, `video33–40` val, `video41–80` test가 된다. 이는 문헌에서 널리 쓰이는 Cholec80 분할 규약이며, 현재 `data/dataset/cholec80`의 배치를 그대로 재현하는 명령이다. 기본 비율 `60:20:20`을 그대로 쓰면 `48 / 16 / 16`이 되어 이 규약과 달라지므로, 재현 목적이라면 비율을 반드시 함께 지정해야 한다.
@@ -362,7 +362,11 @@ while True:
 
 ```python
 from pathlib import Path
-from scripts.generate_dataset import save_frames_for_video
+from importlib import import_module
+
+# 파일명에 "-"가 있어 import 문 대신 import_module로 불러온다.
+_m = import_module("scripts.generate-dataset")
+save_frames_for_video = _m.save_frames_for_video
 
 saved_counts = save_frames_for_video(
     video_path=Path("./data/dataset/erop/progressive/sample01.mp4"),

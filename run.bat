@@ -3,14 +3,14 @@ rem run.bat -- dispatch to a project Python script under scripts\.
 rem
 rem   run <script-name> [args...]   =^>  uv run python -m scripts.<script-name> [args...]
 rem
-rem The trailing ".py" is optional, so "run generate_dataset" and
-rem "run generate_dataset.py" are equivalent. With no arguments, the available
+rem The trailing ".py" is optional, so "run generate-dataset" and
+rem "run generate-dataset.py" are equivalent. With no arguments, the available
 rem scripts are listed. Invoked as a module (-m) rather than a file path so
 rem scripts can import sibling packages at the project root (e.g. tooltip\).
 rem
 rem Examples:
-rem   run generate_dataset --dataset erop
-rem   run generate_segmentation --dataset erop --device cuda:0
+rem   run generate-dataset --dataset erop
+rem   run generate-segmentation --dataset erop --device cuda:0
 rem   run pipeline
 setlocal EnableExtensions
 cd /d "%~dp0"

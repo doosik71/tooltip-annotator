@@ -1,6 +1,6 @@
-# `scripts/annotation_editor.py`
+# `scripts/annotation-editor.py`
 
-`scripts/annotation_editor.py`는 `images`, `segmentation`, `annotation` 데이터를 함께 보여 주고, 수술도구의 bounding box와 tip 좌표를 수동으로 수정할 수 있는 GUI 편집기다.
+`scripts/annotation-editor.py`는 `images`, `segmentation`, `annotation` 데이터를 함께 보여 주고, 수술도구의 bounding box와 tip 좌표를 수동으로 수정할 수 있는 GUI 편집기다.
 
 `--dataset <name>` 옵션을 주면 아래 경로가 자동으로 계산된다.
 
@@ -20,9 +20,9 @@
 이 편집기가 저장한 내용은 `annotation`뿐 아니라 **`annotation-manual`에도 원본으로 기록된다**.
 
 - `annotation-manual`: 이 편집기만 쓴다. 사람이 보정한 프레임만 들어 있고, 어떤 스크립트도 다시 만들어낼 수 없다.
-- `annotation`: `generate_annotation.py`가 만드는 생성물이다. 자동 생성 결과에 수동 보정분을 덮어쓴 전체 레이블이며, 학습·평가 코드가 읽는 대상이다.
+- `annotation`: `generate-annotation.py`가 만드는 생성물이다. 자동 생성 결과에 수동 보정분을 덮어쓴 전체 레이블이며, 학습·평가 코드가 읽는 대상이다.
 
-`generate_annotation.py`는 `annotation-manual`에 파일이 있는 프레임을 건너뛰고 그 파일을 그대로 `annotation`에 복사한다. 따라서 **annotation을 다시 생성해도 이 편집기로 한 작업은 사라지지 않는다**. `annotation` 디렉터리를 통째로 지워도 보정 내용은 복원된다.
+`generate-annotation.py`는 `annotation-manual`에 파일이 있는 프레임을 건너뛰고 그 파일을 그대로 `annotation`에 복사한다. 따라서 **annotation을 다시 생성해도 이 편집기로 한 작업은 사라지지 않는다**. `annotation` 디렉터리를 통째로 지워도 보정 내용은 복원된다.
 
 보정을 취소하고 자동 생성 결과로 돌아가려면 `Revert to Auto`를 사용한다(아래 참고). `annotation` 쪽 JSON을 직접 편집하는 것은 다음 생성 때 되돌아가므로 의미가 없다.
 
@@ -42,19 +42,19 @@
 프로젝트 루트에서 실행한다.
 
 ```bash
-python -m scripts.annotation_editor --dataset erop
+python -m scripts.annotation-editor --dataset erop
 ```
 
 가상환경을 직접 사용할 경우:
 
 ```bash
-.venv/bin/python -m scripts.annotation_editor --dataset erop
+.venv/bin/python -m scripts.annotation-editor --dataset erop
 ```
 
 경로를 직접 지정할 수도 있다(`--dataset` 기본값을 무시).
 
 ```bash
-python -m scripts.annotation_editor \
+python -m scripts.annotation-editor \
   --images ./data/dataset/erop/images \
   --segmentation ./data/dataset/erop/segmentation \
   --annotation ./data/dataset/erop/annotation \
@@ -79,7 +79,7 @@ python -m scripts.annotation_editor \
 `--dataset`과 네 경로 옵션을 모두 생략하면 `data/dataset-src`와 `data/dataset` 아래에서 찾은 **첫 번째 데이터셋**이 자동으로 선택된다. 따라서 아래처럼 인자 없이 실행할 수 있다.
 
 ```bash
-python -m scripts.annotation_editor
+python -m scripts.annotation-editor
 ```
 
 찾은 데이터셋이 하나도 없으면 어떤 옵션이 필요한지 알려주는 메시지와 함께 종료한다.
@@ -179,7 +179,7 @@ split이나 데이터셋을 바꾸면 자리수도 다시 계산된다.
 | 수동 보정          | 연한 노랑 `#ffe9a8`          |
 | 수동 보정 + 선택됨 | 호박색 `#e8a33d`             |
 
-색상은 `scripts/annotation_editor.py` 상단의 `MANUAL_ITEM_*` 상수로 정의되어 있다.
+색상은 `scripts/annotation-editor.py` 상단의 `MANUAL_ITEM_*` 상수로 정의되어 있다.
 
 #### 상태 표시줄
 
@@ -254,7 +254,7 @@ TurboVNC 같은 원격 화면에서는 화살표 커서의 끝이 실제 클릭 
 2. `Revert to Auto` 버튼 클릭 또는 `V` 키 입력
 3. 확인 대화상자에서 `Yes` 선택
 
-`annotation-manual`의 해당 파일이 삭제되고, segmentation mask에서 bbox/tip이 다시 계산되어 `annotation`에 저장된다. 계산에는 `generate_annotation.py`와 동일한 코드(`tooltip/annotation.py`)를 쓰므로 결과도 동일하다.
+`annotation-manual`의 해당 파일이 삭제되고, segmentation mask에서 bbox/tip이 다시 계산되어 `annotation`에 저장된다. 계산에는 `generate-annotation.py`와 동일한 코드(`tooltip/annotation.py`)를 쓰므로 결과도 동일하다.
 
 segmentation mask가 없는 프레임에서는 자동 생성 결과를 만들 수 없으므로 경고만 표시하고 아무것도 바꾸지 않는다.
 
@@ -317,7 +317,7 @@ JSON 구조는 다음과 같다.
 }
 ```
 
-`source`는 이 편집기가 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `Revert to Auto`로 되돌린 프레임은 `annotation`에만 `source: "tooltip-annotator/scripts/generate_annotation.py"` 파일이 남고 `edited_at`은 붙지 않는다.
+`source`는 이 편집기가 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `Revert to Auto`로 되돌린 프레임은 `annotation`에만 `source: "tooltip-annotator/scripts/generate-annotation.py"` 파일이 남고 `edited_at`은 붙지 않는다.
 
 ### 문제 해결
 
@@ -337,9 +337,9 @@ GUI 환경이 없는 터미널 세션일 수 있다. 로컬 데스크톱 세션�
 
 가능하다. 기존 JSON이 없으면 빈 annotation 상태로 열리고, 저장 시 새 JSON 파일이 생성된다.
 
-#### 보정한 내용이 `generate_annotation.py` 재실행으로 사라지지 않는가
+#### 보정한 내용이 `generate-annotation.py` 재실행으로 사라지지 않는가
 
-사라지지 않는다. 저장된 내용은 `annotation-manual`에 원본으로 남고, `generate_annotation.py`는 그 디렉터리를 읽기만 하면서 해당 프레임의 자동 생성을 건너뛴다. `--overwrite`를 줘도 마찬가지다.
+사라지지 않는다. 저장된 내용은 `annotation-manual`에 원본으로 남고, `generate-annotation.py`는 그 디렉터리를 읽기만 하면서 해당 프레임의 자동 생성을 건너뛴다. `--overwrite`를 줘도 마찬가지다.
 
 #### `Revert to Auto` 버튼이 비활성화된 경우
 
@@ -474,13 +474,13 @@ tip 핸들 hit 시 `tip` 모드가 활성화된다. 드래그 중 tip 좌표만 
 1. `annotation-manual/{split}/{stem}.json`에 `source: "manual"` payload를 쓴다. 이것이 원본이다.
 2. 그 파일을 `annotation/{split}/{stem}.json`으로 `shutil.copyfile()` 복사한다.
 
-순서가 중요하다. 원본을 먼저 쓰므로, 2단계에서 중단되더라도 보정 내용 자체는 유실되지 않고 다음 `generate_annotation.py` 실행 때 `annotation`에 반영된다.
+순서가 중요하다. 원본을 먼저 쓰므로, 2단계에서 중단되더라도 보정 내용 자체는 유실되지 않고 다음 `generate-annotation.py` 실행 때 `annotation`에 반영된다.
 
 `annotation`에 사본을 두는 이유는 어노테이션 소비자(학습·평가 코드, 베이스라인, 데이터셋 브라우저) 전체가 `annotation/{split}/*.json`을 직접 읽고 있기 때문이다. 읽는 쪽에서 두 디렉터리를 합치게 하려면 여러 서브 프로젝트를 동시에 고쳐야 하므로, 쓰는 쪽에서 합쳐 두는 방식을 택했다.
 
 ### 되돌리기 정책
 
-`Revert to Auto`는 `annotation-manual`의 파일을 지우고, 메모리에 이미 올라와 있는 segmentation mask로 `tooltip.annotation.extract_annotations()`를 다시 호출해 `annotation`에 `source: "tooltip-annotator/scripts/generate_annotation.py"` payload를 쓴다. `generate_annotation.py`가 쓰는 것과 같은 함수이므로 두 경로의 결과가 어긋날 수 없다.
+`Revert to Auto`는 `annotation-manual`의 파일을 지우고, 메모리에 이미 올라와 있는 segmentation mask로 `tooltip.annotation.extract_annotations()`를 다시 호출해 `annotation`에 `source: "tooltip-annotator/scripts/generate-annotation.py"` payload를 쓴다. `generate-annotation.py`가 쓰는 것과 같은 함수이므로 두 경로의 결과가 어긋날 수 없다.
 
 ### 현재 설계 제약
 
