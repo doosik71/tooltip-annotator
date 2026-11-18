@@ -10,10 +10,8 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from tooltip.annotation import (
     ANNOTATION_SUFFIX,
-    SOURCE_MASK,
     SOURCE_MANUAL,
     build_payload,
-    extract_annotations,
     write_annotation,
 )
 from tooltip.dataset_paths import (
@@ -23,7 +21,6 @@ from tooltip.dataset_paths import (
     list_datasets,
     resolve_path,
     screenshot_dir,
-    segmentation_dir,
 )
 
 try:
@@ -47,7 +44,9 @@ SPLIT_NAMES = ("train", "val", "test")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 HANDLE_SIZE = 7.5
 TIP_RADIUS = 6
-SEGMENTATION_ALPHA = 0.35
+# Annotation keys holding a tip. "tip2" is optional: annotation-qwen records the
+# second end of an opened jaw there.
+TIP_KEYS = ("tip", "tip2")
 # Add mode dims the image to this brightness, except inside the box being drawn.
 ADD_MODE_BRIGHTNESS = 0.5
 MIN_BOX_SIZE = 4
@@ -89,7 +88,6 @@ BUTTON_STYLES = {
     "Delete.TButton": "#c62828",  # red
     "Save.TButton": "#e65100",    # orange
     "Reload.TButton": "#6a1b9a",  # purple
-    "Revert.TButton": "#2e7d32",  # green
     "Screenshot.TButton": "#00838f",  # teal
 }
 ADD_ACTIVE_STYLE = "AddActive.TButton"
@@ -103,8 +101,21 @@ ADD_BUTTON_ACTIVE_LABEL = "Adding... (Esc/Wheel to cancel)"
 DELETE_BUTTON_LABEL = "Delete Tool [DEL]"
 SAVE_BUTTON_LABEL = "Save [F2]"
 RELOAD_BUTTON_LABEL = "Reload [F3]"
-REVERT_BUTTON_LABEL = "Revert to Auto [F4]"
 SCREENSHOT_BUTTON_LABEL = "Screenshot [F5]"
+
+# The view tabs above the image. Default shows annotation/, the final labels
+# training and evaluation read; Manual shows annotation-manual/. Every other
+# annotation-* directory next to annotation/ is an automatic labeller's output
+# (annotation-monai, annotation-qwen, ...) and gets a read-only tab of its own.
+# Number keys 1-9 select the tabs in order.
+DEFAULT_TAB = 0
+MANUAL_TAB = 1
+AUTO_DIR_PREFIX = "annotation-"
+MAX_TAB_SHORTCUTS = 9
+# Horizontal and vertical padding inside each tab, in pixels. The theme default
+# leaves the tabs too narrow to hit comfortably.
+TAB_STYLE = "Source.TNotebook"
+TAB_PADDING = (20, 6)
 
 # Screenshots are drawn with OpenCV at the image's own resolution, so these
 # mirror the canvas colours (as RGB) and sizes in image pixels.
@@ -121,7 +132,6 @@ class AnnotationEditor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.images_root = args.images
-        self.segmentation_root = args.segmentation
         self.annotation_root = args.annotation
         self.manual_root = args.manual
         self.current_dataset = args.dataset or ""
@@ -151,7 +161,6 @@ class AnnotationEditor:
         self.dataset_var = tk.StringVar(value=self.current_dataset)
         self.split_var = tk.StringVar(value=SPLIT_NAMES[0])
         self.auto_save_var = tk.BooleanVar(value=args.auto_save)
-        self.show_segmentation_var = tk.BooleanVar(value=True)
         self.show_annotation_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Ready")
         self.tool_count_var = tk.StringVar(value="0")
@@ -162,9 +171,14 @@ class AnnotationEditor:
         self.current_index: int | None = None
         self.current_image_path: Path | None = None
         self.current_image_rgb: np.ndarray | None = None
-        self.current_segmentation_mask: np.ndarray | None = None
         self.current_annotations: list[dict[str, dict[str, int]]] = []
-        self.current_source = SOURCE_MASK
+        # (label, root, kind) per view tab, kind being "default", "manual" or
+        # "auto". current_tab is the tab shown; preferred_tab is the one the
+        # user picked last, shown again on every frame that has it.
+        self.tabs: list[tuple[str, Path, str]] = []
+        self.tab_frames: list[ttk.Frame] = []
+        self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
         self.manual_stems: set[str] = set()
         self.manual_indices: set[int] = set()
         self.list_index_width = 1
@@ -189,6 +203,7 @@ class AnnotationEditor:
         self._build_ui()
         self._bind_events()
         self._ensure_output_dirs()
+        self._rebuild_tabs()
         self._load_split(self.current_split)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -262,11 +277,6 @@ class AnnotationEditor:
         )
         self.reload_button.pack(side=tk.LEFT, padx=(8, 0))
 
-        self.revert_button = ttk.Button(
-            top_bar, text=REVERT_BUTTON_LABEL, style="Revert.TButton", command=self._revert_to_auto
-        )
-        self.revert_button.pack(side=tk.LEFT, padx=(8, 0))
-
         self.screenshot_button = ttk.Button(
             top_bar, text=SCREENSHOT_BUTTON_LABEL, style="Screenshot.TButton",
             command=self._save_screenshot
@@ -281,21 +291,13 @@ class AnnotationEditor:
         )
         self.auto_save_checkbutton.pack(side=tk.LEFT, padx=(12, 0))
 
-        self.show_segmentation_checkbutton = ttk.Checkbutton(
-            top_bar,
-            text="Show Segmentation",
-            variable=self.show_segmentation_var,
-            command=self._render_scene,
-        )
-        self.show_segmentation_checkbutton.pack(side=tk.LEFT, padx=(18, 0))
-
         self.show_annotation_checkbutton = ttk.Checkbutton(
             top_bar,
             text="Show Annotation",
             variable=self.show_annotation_var,
             command=self._render_scene,
         )
-        self.show_annotation_checkbutton.pack(side=tk.LEFT, padx=(12, 0))
+        self.show_annotation_checkbutton.pack(side=tk.LEFT, padx=(18, 0))
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -327,6 +329,12 @@ class AnnotationEditor:
         right_panel = ttk.Frame(body)
         body.add(right_panel, weight=1)
 
+        # Only the tab strip is used: every tab holds an empty frame and the
+        # single canvas below shows whichever annotation source is selected.
+        ttk.Style().configure(f"{TAB_STYLE}.Tab", padding=TAB_PADDING)
+        self.tab_notebook = ttk.Notebook(right_panel, style=TAB_STYLE)
+        self.tab_notebook.pack(side=tk.TOP, fill=tk.X)
+
         self.canvas = tk.Canvas(right_panel, background="#101417", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
@@ -335,7 +343,8 @@ class AnnotationEditor:
         # enough for the status readout that used to crowd the toolbar.
         instruction = (
             "Drag bbox interior to move. Drag corner/edge handles to resize. "
-            "Drag red tip handle to move the tip. Arrow keys or mouse wheel move between images."
+            "Drag red tip handle to move the tip. Right-click for tool actions. "
+            "Arrow keys or mouse wheel move between images."
         )
         bottom_bar = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bottom_bar.pack(side=tk.BOTTOM, fill=tk.X)
@@ -388,6 +397,9 @@ class AnnotationEditor:
         # and cancels it like Escape, so a new box can be started or abandoned
         # without leaving the mouse. Button-2 is the wheel on Windows and X11.
         self.canvas.bind("<ButtonPress-2>", self._on_canvas_wheel_click)
+        # Right click opens a context menu for the tool under the pointer, or
+        # for the selected one when the click lands on empty image.
+        self.canvas.bind("<ButtonPress-3>", self._on_canvas_context_menu)
         # Wheel scroll over the image steps through images: up is previous,
         # down is next. Windows (and Tk 9 on X11) report <MouseWheel>; older
         # Tk on X11 reports Button-4/5 instead.
@@ -406,9 +418,23 @@ class AnnotationEditor:
         self.root.bind("<Right>", self._on_next_image_shortcut)
         self.root.bind("<F2>", self._on_save_shortcut)
         self.root.bind("<F3>", self._on_reload_shortcut)
-        self.root.bind("<F4>", self._on_revert_shortcut)
         self.root.bind("<F5>", self._on_screenshot_shortcut)
         self.root.bind("<Escape>", self._on_escape)
+        for number in range(1, MAX_TAB_SHORTCUTS + 1):
+            self.root.bind(
+                f"<Key-{number}>",
+                lambda _event, index=number - 1: self._on_tab_shortcut(index),
+            )
+        self.tab_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        # Clicking a tab focuses the notebook, whose class bindings would then
+        # cycle tabs on Left/Right. Keep the arrows stepping through images.
+        for key, handler in (
+            ("<Left>", self._on_previous_image_shortcut),
+            ("<Up>", self._on_previous_image_shortcut),
+            ("<Right>", self._on_next_image_shortcut),
+            ("<Down>", self._on_next_image_shortcut),
+        ):
+            self.tab_notebook.bind(key, handler)
 
     def _ensure_output_dirs(self) -> None:
         """Create the generated-annotation directories only.
@@ -440,13 +466,13 @@ class AnnotationEditor:
         self.current_dataset = dataset_name
         self.dataset_var.set(dataset_name)
         self.images_root = images_dir(dataset_name)
-        self.segmentation_root = segmentation_dir(dataset_name)
         self.annotation_root = annotation_dir(dataset_name)
         self.manual_root = annotation_manual_dir(dataset_name)
         # Only materialise output directories for a dataset that actually has
         # frames, so selecting a source-only entry does not litter data/.
         if self.images_root.is_dir():
             self._ensure_output_dirs()
+        self._rebuild_tabs()
         self._load_split(self.current_split)
 
     def _on_split_changed(self, _event: tk.Event[tk.Misc]) -> None:
@@ -498,9 +524,16 @@ class AnnotationEditor:
         self._reload_current_annotation()
         return "break"
 
-    def _on_revert_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
-        self._revert_to_auto()
+    def _on_tab_shortcut(self, index: int) -> str:
+        self._request_tab(index)
         return "break"
+
+    def _on_tab_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        # The event is queued, so it also arrives after every programmatic
+        # select(); by then current_tab already matches and it is ignored.
+        selected = self.tab_notebook.index("current")
+        if selected != self.current_tab:
+            self._request_tab(selected)
 
     def _on_screenshot_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._save_screenshot()
@@ -551,9 +584,8 @@ class AnnotationEditor:
         self.current_index = None
         self.current_image_path = None
         self.current_image_rgb = None
-        self.current_segmentation_mask = None
         self.current_annotations = []
-        self.current_source = SOURCE_MASK
+        self.current_tab = DEFAULT_TAB
         self.selected_annotation_index = None
         self.preview_box = None
         self.drag_state = None
@@ -580,6 +612,7 @@ class AnnotationEditor:
             self._open_image_at_index(0)
         else:
             self._update_images_label()
+            self._refresh_tab_states()
             self._render_scene()
             self._update_status("No images found in the selected split.")
         self._update_buttons()
@@ -590,15 +623,92 @@ class AnnotationEditor:
         self.current_image_path = self.image_paths[index]
         self.current_image_rgb = self._load_rgb_image(self.current_image_path)
         self.image_height, self.image_width = self.current_image_rgb.shape[:2]
-        self.current_segmentation_mask = self._load_segmentation_mask(self.current_image_path)
-        self.current_annotations = self._load_annotation(self.current_image_path)
-        self.current_source = (
-            SOURCE_MANUAL
-            if self.current_image_path.stem in self.manual_stems
-            else SOURCE_MASK
+        self.current_tab = (
+            self.preferred_tab
+            if self._tab_available(self.preferred_tab)
+            else DEFAULT_TAB
         )
         self._update_images_label()
         self._render_list_markers()
+        self._load_current_tab()
+
+    def _discover_tabs(self) -> list[tuple[str, Path, str]]:
+        """Return Default, Manual, then one tab per annotation-* sibling directory.
+
+        The automatic sources are found on disk rather than listed in code, so
+        a new labeller only has to write annotation-<name>/ to get a tab.
+        """
+        tabs = [
+            ("Default", self.annotation_root, "default"),
+            ("Manual", self.manual_root, "manual"),
+        ]
+        parent = self.annotation_root.parent
+        if parent.is_dir():
+            for path in sorted(parent.glob(f"{AUTO_DIR_PREFIX}*")):
+                if not path.is_dir() or path.resolve() == self.manual_root.resolve():
+                    continue
+                if path.name == self.manual_root.name:
+                    continue
+                label = path.name.removeprefix(AUTO_DIR_PREFIX).capitalize()
+                tabs.append((label, path, "auto"))
+        return tabs
+
+    def _rebuild_tabs(self) -> None:
+        for frame in self.tab_frames:
+            self.tab_notebook.forget(frame)
+            frame.destroy()
+        self.tabs = self._discover_tabs()
+        self.tab_frames = []
+        for index, (label, _root, _kind) in enumerate(self.tabs):
+            text = f"[{index + 1}] {label}" if index < MAX_TAB_SHORTCUTS else label
+            frame = ttk.Frame(self.tab_notebook, height=0)
+            self.tab_notebook.add(frame, text=text)
+            self.tab_frames.append(frame)
+        self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
+        self.tab_notebook.select(DEFAULT_TAB)
+
+    def _tab_annotation_path(self, tab_index: int, image_path: Path) -> Path:
+        root = self.tabs[tab_index][1]
+        return root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
+
+    def _tab_available(self, tab_index: int) -> bool:
+        """Default is always open; every other tab needs a file for this frame."""
+        if tab_index == DEFAULT_TAB:
+            return True
+        if self.current_image_path is None or tab_index >= len(self.tabs):
+            return False
+        return self._tab_annotation_path(tab_index, self.current_image_path).exists()
+
+    def _refresh_tab_states(self) -> None:
+        # Enable the shown tab before selecting it: a disabled tab cannot be
+        # selected.
+        for index in range(len(self.tabs)):
+            available = self._tab_available(index)
+            self.tab_notebook.tab(index, state=tk.NORMAL if available else tk.DISABLED)
+        self.tab_notebook.select(self.current_tab)
+
+    def _request_tab(self, index: int) -> None:
+        """Switch the view to another annotation source, asking about unsaved edits."""
+        if (
+            index == self.current_tab
+            or index >= len(self.tabs)
+            or self.current_image_path is None
+            or not self._tab_available(index)
+            or not self._confirm_leave_current_image(always_ask=True)
+        ):
+            self.tab_notebook.select(self.current_tab)
+            return
+        self.current_tab = index
+        self.preferred_tab = index
+        self._load_current_tab()
+
+    def _load_current_tab(self) -> None:
+        """Show the current frame's annotations from the source of the current tab."""
+        self._refresh_tab_states()
+        self.current_annotations = self._load_annotation(
+            self._tab_annotation_path(self.current_tab, self.current_image_path)
+        )
         self.selected_annotation_index = 0 if self.current_annotations else None
         self.preview_box = None
         self.drag_state = None
@@ -614,21 +724,7 @@ class AnnotationEditor:
             raise RuntimeError(f"Failed to read image: {image_path}")
         return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-    def _load_segmentation_mask(self, image_path: Path) -> np.ndarray | None:
-        mask_path = self.segmentation_root / self.current_split / f"{image_path.stem}.png"
-        if not mask_path.exists():
-            return None
-
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
-        if mask is None:
-            return None
-        if mask.ndim == 3:
-            mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
-        return binary
-
-    def _load_annotation(self, image_path: Path) -> list[dict[str, dict[str, int]]]:
-        annotation_path = self._annotation_path_for_image(image_path)
+    def _load_annotation(self, annotation_path: Path) -> list[dict[str, dict[str, int]]]:
         if not annotation_path.exists():
             return []
 
@@ -644,36 +740,60 @@ class AnnotationEditor:
             bbox = item.get("bbox", {})
             tip = item.get("tip", {})
             try:
-                normalized.append(
-                    {
-                        "bbox": self._normalize_bbox(
-                            {
-                                "x": int(bbox.get("x", 0)),
-                                "y": int(bbox.get("y", 0)),
-                                "width": int(bbox.get("width", 1)),
-                                "height": int(bbox.get("height", 1)),
-                            }
-                        ),
-                        "tip": self._normalize_tip(
-                            {
-                                "x": int(tip.get("x", 0)),
-                                "y": int(tip.get("y", 0)),
-                            }
-                        ),
-                    }
-                )
+                annotation = {
+                    "bbox": self._normalize_bbox(
+                        {
+                            "x": int(bbox.get("x", 0)),
+                            "y": int(bbox.get("y", 0)),
+                            "width": int(bbox.get("width", 1)),
+                            "height": int(bbox.get("height", 1)),
+                        }
+                    ),
+                    "tip": self._normalize_tip(
+                        {
+                            "x": int(tip.get("x", 0)),
+                            "y": int(tip.get("y", 0)),
+                        }
+                    ),
+                }
+                tip2 = item.get("tip2")
+                if isinstance(tip2, dict):
+                    annotation["tip2"] = self._normalize_tip(
+                        {"x": int(tip2.get("x", 0)), "y": int(tip2.get("y", 0))}
+                    )
             except (TypeError, ValueError):
                 continue
+            # Carried through untouched so a save keeps the instrument name.
+            label = item.get("label")
+            if isinstance(label, str):
+                annotation["label"] = label
+            normalized.append(annotation)
         return normalized
 
     def _save_current_annotation(self) -> None:
-        """Store the edit in annotation-manual/, then mirror it into annotation/.
+        """Write the shown annotation into annotation/, the final labels.
 
-        annotation-manual/ is the original that `generate-annotation` must never
-        overwrite; annotation/ stays the single complete tree every consumer
-        (training, baselines, dataset browser) already reads.
+        An edit is stored in annotation-manual/ first and then mirrored into
+        annotation/, whichever tab it was made on. An unedited automatic result
+        (Monai, Qwen, ...) is adopted by copying its file into annotation/ as
+        it is, keeping its own source. The automatic directories are never
+        written to.
         """
         if self.current_image_path is None:
+            return
+
+        label, _root, kind = self.tabs[self.current_tab]
+        annotation_path = self._tab_annotation_path(DEFAULT_TAB, self.current_image_path)
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not self.dirty:
+            if kind != "auto":
+                return
+            shutil.copyfile(
+                self._tab_annotation_path(self.current_tab, self.current_image_path),
+                annotation_path,
+            )
+            self._update_status(f"Adopted the {label} annotation into annotation/.")
             return
 
         payload = build_payload(
@@ -681,88 +801,37 @@ class AnnotationEditor:
             width=self.image_width,
             height=self.image_height,
             annotations=[
-                {
-                    "bbox": annotation["bbox"],
-                    "tip": annotation["tip"],
-                }
+                {key: annotation[key] for key in ("bbox", *TIP_KEYS, "label") if key in annotation}
                 for annotation in self.current_annotations
             ],
             source=SOURCE_MANUAL,
         )
 
-        manual_path = self._manual_path_for_image(self.current_image_path)
+        manual_path = self._tab_annotation_path(MANUAL_TAB, self.current_image_path)
         manual_path.parent.mkdir(parents=True, exist_ok=True)
         write_annotation(manual_path, payload)
-
-        annotation_path = self._annotation_path_for_image(self.current_image_path)
-        annotation_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(manual_path, annotation_path)
 
-        self.current_source = SOURCE_MANUAL
         self._set_current_manual_flag(True)
         self.dirty = False
+        # An edit made on an automatic tab is a manual annotation now, so show
+        # it under Manual rather than under the source it no longer matches.
+        if kind == "auto":
+            self.current_tab = MANUAL_TAB
+        self._refresh_tab_states()
         self._update_buttons()
         self._update_status("Saved manual annotation.")
-
-    def _revert_to_auto(self) -> None:
-        """Drop the manual edit for this frame and recompute it from the mask."""
-        if self.current_image_path is None:
-            return
-        if self.current_source != SOURCE_MANUAL:
-            self._update_status("This annotation is already automatic.")
-            return
-        if self.current_segmentation_mask is None:
-            messagebox.showwarning(
-                "Revert to Auto",
-                "No segmentation mask for this frame, so the automatic "
-                "annotation cannot be recomputed.",
-            )
-            return
-        if not messagebox.askyesno(
-            "Revert to Auto",
-            "Discard the manual annotation for this frame and recompute it "
-            "from the segmentation mask?",
-            default=messagebox.NO,
-        ):
-            return
-
-        payload = build_payload(
-            image_name=self.current_image_path.name,
-            width=self.image_width,
-            height=self.image_height,
-            annotations=extract_annotations(self.current_segmentation_mask),
-            source=SOURCE_MASK,
-        )
-
-        manual_path = self._manual_path_for_image(self.current_image_path)
-        manual_path.unlink(missing_ok=True)
-        annotation_path = self._annotation_path_for_image(self.current_image_path)
-        annotation_path.parent.mkdir(parents=True, exist_ok=True)
-        write_annotation(annotation_path, payload)
-
-        self.current_source = SOURCE_MASK
-        self._set_current_manual_flag(False)
-        self.current_annotations = self._load_annotation(self.current_image_path)
-        self.selected_annotation_index = 0 if self.current_annotations else None
-        self.preview_box = None
-        self.drag_state = None
-        self.mode = "select"
-        self.dirty = False
-        self._update_buttons()
-        self._update_status("Reverted to the automatic annotation.")
-        self._render_scene()
 
     def _save_screenshot(self) -> None:
         """Write the current frame with its visible overlays for slides.
 
-        The overlays follow the Show Segmentation / Show Annotation toggles. The
-        image keeps its native resolution, and editing aids (selection
+        The annotation overlay follows the Show Annotation toggle. The image keeps its native resolution, and editing aids (selection
         highlight, resize handles, the add-mode preview box) are left out.
         """
         if self.current_image_path is None or self.current_image_rgb is None:
             return
 
-        composed = self._compose_display_image()
+        composed = self.current_image_rgb.copy()
         if self.show_annotation_var.get():
             self._draw_screenshot_annotations(composed)
 
@@ -798,18 +867,15 @@ class AnnotationEditor:
 
         for annotation in self.current_annotations:
             bbox = annotation["bbox"]
-            tip = (annotation["tip"]["x"], annotation["tip"]["y"])
             center = (bbox["x"] + bbox["width"] // 2, bbox["y"] + bbox["height"] // 2)
-            cv2.line(image, center, tip, SCREENSHOT_TIP_LINE_COLOR, SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
-            cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_FILL_COLOR, -1, cv2.LINE_AA)
-            cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_OUTLINE_COLOR,
-                       SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
-
-    def _annotation_path_for_image(self, image_path: Path) -> Path:
-        return self.annotation_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
-
-    def _manual_path_for_image(self, image_path: Path) -> Path:
-        return self.manual_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
+            for key in TIP_KEYS:
+                if key not in annotation:
+                    continue
+                tip = (annotation[key]["x"], annotation[key]["y"])
+                cv2.line(image, center, tip, SCREENSHOT_TIP_LINE_COLOR, SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
+                cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_FILL_COLOR, -1, cv2.LINE_AA)
+                cv2.circle(image, tip, TIP_RADIUS, SCREENSHOT_TIP_OUTLINE_COLOR,
+                           SCREENSHOT_LINE_WIDTH, cv2.LINE_AA)
 
     def _list_manual_stems(self, split_name: str) -> set[str]:
         manual_dir = self.manual_root / split_name
@@ -982,7 +1048,7 @@ class AnnotationEditor:
             )
             return
 
-        composed = self._compose_display_image()
+        composed = self.current_image_rgb
         canvas_width = max(self.canvas.winfo_width(), 1)
         canvas_height = max(self.canvas.winfo_height(), 1)
         scale = min(canvas_width / self.image_width, canvas_height / self.image_height)
@@ -1043,15 +1109,6 @@ class AnnotationEditor:
             dimmed[top:bottom, left:right] = display_rgb[top:bottom, left:right]
         return dimmed
 
-    def _compose_display_image(self) -> np.ndarray:
-        composed = self.current_image_rgb.copy()
-        if self.show_segmentation_var.get() and self.current_segmentation_mask is not None:
-            mask = self.current_segmentation_mask > 0
-            overlay = composed.copy()
-            overlay[mask] = np.array([30, 220, 80], dtype=np.uint8)
-            composed = cv2.addWeighted(overlay, SEGMENTATION_ALPHA, composed, 1.0 - SEGMENTATION_ALPHA, 0.0)
-        return composed
-
     def _draw_annotation_box(self, index: int, annotation: dict[str, dict[str, int]]) -> None:
         bbox = annotation["bbox"]
         x1 = bbox["x"]
@@ -1096,33 +1153,35 @@ class AnnotationEditor:
 
     def _draw_annotation_tip(self, index: int, annotation: dict[str, dict[str, int]]) -> None:
         bbox = annotation["bbox"]
-        tip = annotation["tip"]
         x1 = bbox["x"]
         y1 = bbox["y"]
         x2 = bbox["x"] + bbox["width"]
         y2 = bbox["y"] + bbox["height"]
         cx1, cy1 = self._image_to_canvas(x1, y1)
         cx2, cy2 = self._image_to_canvas(x2, y2)
-        tip_x, tip_y = self._image_to_canvas(tip["x"], tip["y"])
 
-        self.canvas.create_line(
-            (cx1 + cx2) / 2.0,
-            (cy1 + cy2) / 2.0,
-            tip_x,
-            tip_y,
-            fill="#ff8080",
-            width=2,
-            dash=(3, 2),
-        )
-        self.canvas.create_oval(
-            tip_x - TIP_RADIUS,
-            tip_y - TIP_RADIUS,
-            tip_x + TIP_RADIUS,
-            tip_y + TIP_RADIUS,
-            outline="#7a0000",
-            fill=HANDLE_HOVER_FILL if self.hovered_handle == ("tip", index, None) else "#ff4d4d",
-            width=2,
-        )
+        for key in TIP_KEYS:
+            if key not in annotation:
+                continue
+            tip_x, tip_y = self._image_to_canvas(annotation[key]["x"], annotation[key]["y"])
+            self.canvas.create_line(
+                (cx1 + cx2) / 2.0,
+                (cy1 + cy2) / 2.0,
+                tip_x,
+                tip_y,
+                fill="#ff8080",
+                width=2,
+                dash=(3, 2),
+            )
+            self.canvas.create_oval(
+                tip_x - TIP_RADIUS,
+                tip_y - TIP_RADIUS,
+                tip_x + TIP_RADIUS,
+                tip_y + TIP_RADIUS,
+                outline="#7a0000",
+                fill=HANDLE_HOVER_FILL if self.hovered_handle == ("tip", index, key) else "#ff4d4d",
+                width=2,
+            )
 
     def _rgb_to_photoimage(self, rgb: np.ndarray) -> tk.PhotoImage:
         height, width = rgb.shape[:2]
@@ -1154,6 +1213,77 @@ class AnnotationEditor:
         self._update_status("Add mode: drag on the image to create a new bbox.")
         self._render_scene()
 
+    def _on_canvas_context_menu(self, event: tk.Event[tk.Misc]) -> str:
+        """Pop up the tool actions for the right-clicked or selected tool.
+
+        A right click on a tool selects it first, like a left click. With a tool
+        selected the menu offers Delete Tool and Add/Remove Second Tip; with
+        none it offers Add Tool.
+        """
+        if self.current_image_rgb is None or self.mode == "add":
+            return "break"
+
+        image_x, image_y = self._canvas_to_image(event.x, event.y)
+        if self.show_annotation_var.get():
+            hit = self._hit_test(image_x, image_y)
+            if hit is not None and hit["index"] != self.selected_annotation_index:
+                self.selected_annotation_index = hit["index"]
+                self._update_buttons()
+                self._render_scene()
+        else:
+            # Hidden tools cannot be targeted, matching the left click.
+            self.selected_annotation_index = None
+            self._update_buttons()
+            self._render_scene()
+
+        menu = tk.Menu(self.root, tearoff=False)
+        if self.selected_annotation_index is None:
+            menu.add_command(label="Add Tool", command=self._enter_add_mode)
+        else:
+            has_tip2 = "tip2" in self.current_annotations[self.selected_annotation_index]
+            menu.add_command(label="Delete Tool", command=self._delete_selected)
+            menu.add_separator()
+            menu.add_command(
+                label="Add Second Tip",
+                command=lambda: self._add_second_tip(image_x, image_y),
+                state=tk.DISABLED if has_tip2 else tk.NORMAL,
+            )
+            menu.add_command(
+                label="Remove Second Tip",
+                command=self._remove_second_tip,
+                state=tk.NORMAL if has_tip2 else tk.DISABLED,
+            )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
+    def _add_second_tip(self, image_x: float, image_y: float) -> None:
+        """Give the selected tool a second tip at the right-clicked point.
+
+        The point is pulled onto the nearest pixel inside the box, so a menu
+        opened from outside the box still lands the tip on the tool.
+        """
+        if self.selected_annotation_index is None:
+            return
+        annotation = self.current_annotations[self.selected_annotation_index]
+        if "tip2" in annotation:
+            return
+        bbox = annotation["bbox"]
+        annotation["tip2"] = {
+            "x": self._clamp_int(int(round(image_x)), bbox["x"], bbox["x"] + bbox["width"] - 1),
+            "y": self._clamp_int(int(round(image_y)), bbox["y"], bbox["y"] + bbox["height"] - 1),
+        }
+        self._mark_dirty()
+
+    def _remove_second_tip(self) -> None:
+        if self.selected_annotation_index is None:
+            return
+        annotation = self.current_annotations[self.selected_annotation_index]
+        if annotation.pop("tip2", None) is not None:
+            self._mark_dirty()
+
     def _delete_selected(self) -> None:
         if self.selected_annotation_index is None:
             return
@@ -1166,17 +1296,13 @@ class AnnotationEditor:
         self._render_scene()
 
     def _reload_current_annotation(self) -> None:
+        """Discard edits and show the frame's final labels from annotation/ again."""
         if self.current_image_path is None:
             return
-        self.current_annotations = self._load_annotation(self.current_image_path)
-        self.selected_annotation_index = 0 if self.current_annotations else None
-        self.preview_box = None
-        self.drag_state = None
-        self.mode = "select"
-        self.dirty = False
-        self._update_buttons()
-        self._update_status("Reloaded annotation from file.")
-        self._render_scene()
+        self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
+        self._load_current_tab()
+        self._update_status("Reloaded annotation from annotation/.")
 
     def _navigate_images(self, step: int) -> None:
         if self.current_index is None or not self.image_paths:
@@ -1230,14 +1356,13 @@ class AnnotationEditor:
 
         self.selected_annotation_index = hit["index"]
         annotation = self.current_annotations[self.selected_annotation_index]
-        bbox = annotation["bbox"].copy()
-        tip = annotation["tip"].copy()
         self.drag_state = {
             "kind": hit["kind"],
             "index": hit["index"],
             "start_point": (image_x, image_y),
-            "start_bbox": bbox,
-            "start_tip": tip,
+            "start_bbox": annotation["bbox"].copy(),
+            # For a tip drag "handle" names the tip being dragged.
+            "start_tips": {key: annotation[key].copy() for key in TIP_KEYS if key in annotation},
             "handle": hit.get("handle"),
         }
         self._update_buttons()
@@ -1275,7 +1400,7 @@ class AnnotationEditor:
             return (
                 str(self.drag_state["kind"]),
                 int(self.drag_state["index"]),
-                self.drag_state["handle"] if self.drag_state["kind"] == "resize" else None,
+                self.drag_state["handle"],
             )
         if (
             self.pointer_position is None
@@ -1310,7 +1435,7 @@ class AnnotationEditor:
                 "x": int(round(image_x)),
                 "y": int(round(image_y)),
             }
-            annotation["tip"] = tip
+            annotation[self.drag_state["handle"]] = tip
             # Grow the box from its drag-start extent so it always contains the
             # tip pixel; dragging the tip back inside restores the original box.
             start_bbox = self.drag_state["start_bbox"]
@@ -1327,7 +1452,6 @@ class AnnotationEditor:
         if kind == "move":
             start_x, start_y = self.drag_state["start_point"]
             start_bbox = self.drag_state["start_bbox"]
-            start_tip = self.drag_state["start_tip"]
             delta_x = int(round(image_x - start_x))
             delta_y = int(round(image_y - start_y))
 
@@ -1342,12 +1466,13 @@ class AnnotationEditor:
                 "width": start_bbox["width"],
                 "height": start_bbox["height"],
             }
-            annotation["tip"] = self._normalize_tip(
-                {
-                    "x": start_tip["x"] + applied_delta_x,
-                    "y": start_tip["y"] + applied_delta_y,
-                }
-            )
+            for key, start_tip in self.drag_state["start_tips"].items():
+                annotation[key] = self._normalize_tip(
+                    {
+                        "x": start_tip["x"] + applied_delta_x,
+                        "y": start_tip["y"] + applied_delta_y,
+                    }
+                )
             self._mark_dirty(render=False)
             self._render_scene()
             return
@@ -1373,18 +1498,18 @@ class AnnotationEditor:
 
             normalized = self._normalize_box_from_points(x1, y1, x2, y2)
             annotation["bbox"] = normalized
-            # Pull the tip from its drag-start position onto the nearest pixel
+            # Pull each tip from its drag-start position onto the nearest pixel
             # inside the box, so shrinking never leaves it outside; growing
             # the box back restores the original tip.
-            start_tip = self.drag_state["start_tip"]
-            annotation["tip"] = {
-                "x": self._clamp_int(
-                    start_tip["x"], normalized["x"], normalized["x"] + normalized["width"] - 1
-                ),
-                "y": self._clamp_int(
-                    start_tip["y"], normalized["y"], normalized["y"] + normalized["height"] - 1
-                ),
-            }
+            for key, start_tip in self.drag_state["start_tips"].items():
+                annotation[key] = {
+                    "x": self._clamp_int(
+                        start_tip["x"], normalized["x"], normalized["x"] + normalized["width"] - 1
+                    ),
+                    "y": self._clamp_int(
+                        start_tip["y"], normalized["y"], normalized["y"] + normalized["height"] - 1
+                    ),
+                }
             self._mark_dirty(render=False)
             self._render_scene()
 
@@ -1432,17 +1557,20 @@ class AnnotationEditor:
 
         # Tips first: a tip may sit inside any number of boxes and must not be
         # shadowed by them. Nearest tip wins, the selected one breaking ties.
-        tip_hit: tuple[tuple[float, bool], int] | None = None
+        tip_hit: tuple[tuple[float, bool], int, str] | None = None
         for index, annotation in enumerate(self.current_annotations):
-            tip = annotation["tip"]
-            distance_sq = (tip["x"] - image_x) ** 2 + (tip["y"] - image_y) ** 2
-            if distance_sq > tip_threshold_sq:
-                continue
-            key = (distance_sq, index != self.selected_annotation_index)
-            if tip_hit is None or key < tip_hit[0]:
-                tip_hit = (key, index)
+            for tip_key in TIP_KEYS:
+                if tip_key not in annotation:
+                    continue
+                tip = annotation[tip_key]
+                distance_sq = (tip["x"] - image_x) ** 2 + (tip["y"] - image_y) ** 2
+                if distance_sq > tip_threshold_sq:
+                    continue
+                key = (distance_sq, index != self.selected_annotation_index)
+                if tip_hit is None or key < tip_hit[0]:
+                    tip_hit = (key, index, tip_key)
         if tip_hit is not None:
-            return {"index": tip_hit[1], "kind": "tip"}
+            return {"index": tip_hit[1], "kind": "tip", "handle": tip_hit[2]}
 
         # Resize handles exist only on the selected box.
         if self.selected_annotation_index is not None:
@@ -1503,15 +1631,18 @@ class AnnotationEditor:
             self._render_scene()
 
     def _update_buttons(self) -> None:
-        self.save_button.configure(state=tk.NORMAL if self.dirty else tk.DISABLED)
+        # An unedited automatic result can still be saved: that adopts it.
+        adoptable = (
+            self.current_image_path is not None
+            and bool(self.tabs)
+            and self.tabs[self.current_tab][2] == "auto"
+        )
+        self.save_button.configure(state=tk.NORMAL if self.dirty or adoptable else tk.DISABLED)
         self.delete_button.configure(state=tk.NORMAL if self.selected_annotation_index is not None else tk.DISABLED)
         adding = self.mode == "add"
         self.add_button.configure(
             text=ADD_BUTTON_ACTIVE_LABEL if adding else ADD_BUTTON_LABEL,
             style=ADD_ACTIVE_STYLE if adding else "Add.TButton",
-        )
-        self.revert_button.configure(
-            state=tk.NORMAL if self.current_source == SOURCE_MANUAL else tk.DISABLED
         )
         self.screenshot_button.configure(
             state=tk.NORMAL if self.current_image_path is not None else tk.DISABLED
@@ -1531,19 +1662,20 @@ class AnnotationEditor:
         mode_text = "add" if self.mode == "add" else "select"
         self.status_var.set(f"mode={mode_text}")
 
-    def _confirm_leave_current_image(self) -> bool:
+    def _confirm_leave_current_image(self, always_ask: bool = False) -> bool:
         if not self.dirty:
             return True
 
         # Auto save turns the prompt into a save, which is the whole point of
-        # the option: moving between frames must not stop to ask.
-        if self.auto_save_var.get():
+        # the option: moving between frames must not stop to ask. Switching
+        # tabs passes always_ask, since it may be a deliberate look elsewhere.
+        if self.auto_save_var.get() and not always_ask:
             self._save_current_annotation()
             return not self.dirty
 
         response = messagebox.askyesnocancel(
             "Unsaved changes",
-            "Save changes before switching images or closing the editor?",
+            "Save changes before switching images or tabs, or closing the editor?",
             default=messagebox.YES,
         )
         if response is None:
@@ -1612,14 +1744,18 @@ class AnnotationEditor:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="GUI editor for bbox/tip annotations generated from segmentation masks."
+        description=(
+            "GUI editor for bbox/tip annotations. Shows annotation/, "
+            "annotation-manual/ and every automatic annotation-* source side by "
+            "side in tabs, and writes only annotation/ and annotation-manual/."
+        )
     )
     parser.add_argument(
         "--dataset",
         default=None,
         help=(
             "Dataset name, e.g. 'erop' or 'cholec80'. Used to resolve default "
-            "--images/--segmentation/--annotation/--manual when not given "
+            "--images/--annotation/--manual when not given "
             "explicitly. Defaults to the first dataset found under "
             "data/dataset-src or data/dataset; the Dataset selector in the "
             "toolbar switches at runtime."
@@ -1632,16 +1768,14 @@ def parse_args() -> argparse.Namespace:
         help="Root directory containing train/val/test source images. Defaults to data/dataset/<dataset>/images.",
     )
     parser.add_argument(
-        "--segmentation",
-        type=Path,
-        default=None,
-        help="Root directory containing train/val/test segmentation masks. Defaults to data/dataset/<dataset>/segmentation.",
-    )
-    parser.add_argument(
         "--annotation",
         type=Path,
         default=None,
-        help="Root directory containing train/val/test annotation JSON files. Defaults to data/dataset/<dataset>/annotation.",
+        help=(
+            "Root directory of the final train/val/test annotation JSON files. "
+            "Its annotation-* siblings are shown as automatic sources. Defaults "
+            "to data/dataset/<dataset>/annotation."
+        ),
     )
     parser.add_argument(
         "--manual",
@@ -1649,8 +1783,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Root directory where hand-corrected annotation JSON files are "
-            "kept. generate-annotation.py never overwrites these. Defaults to "
-            "data/dataset/<dataset>/annotation-manual."
+            "kept. Defaults to data/dataset/<dataset>/annotation-manual."
         ),
     )
     parser.add_argument(
@@ -1678,24 +1811,17 @@ def validate_args(args: argparse.Namespace) -> None:
             "Install it and run the script again."
         ) from NUMPY_IMPORT_ERROR
 
-    for path, label in (
-        (args.images, "images"),
-        (args.segmentation, "segmentation"),
-    ):
-        if not path.exists():
-            raise FileNotFoundError(f"{label} directory does not exist: {path}")
-        if not path.is_dir():
-            raise NotADirectoryError(f"{label} path is not a directory: {path}")
+    if not args.images.exists():
+        raise FileNotFoundError(f"images directory does not exist: {args.images}")
+    if not args.images.is_dir():
+        raise NotADirectoryError(f"images path is not a directory: {args.images}")
 
     args.annotation.mkdir(parents=True, exist_ok=True)
 
     for split_name in SPLIT_NAMES:
         images_split = args.images / split_name
-        segmentation_split = args.segmentation / split_name
         if not images_split.exists():
             raise FileNotFoundError(f"Image split directory does not exist: {images_split}")
-        if not segmentation_split.exists():
-            raise FileNotFoundError(f"Segmentation split directory does not exist: {segmentation_split}")
 
 
 def main() -> int:
@@ -1706,7 +1832,7 @@ def main() -> int:
     # case instead.
     args.dataset_locked = any(
         path is not None
-        for path in (args.images, args.segmentation, args.annotation, args.manual)
+        for path in (args.images, args.annotation, args.manual)
     )
 
     if args.dataset is None and not args.dataset_locked:
@@ -1719,7 +1845,6 @@ def main() -> int:
         args.dataset = datasets[0]
 
     args.images = resolve_path(args.images, args.dataset, images_dir, "--images")
-    args.segmentation = resolve_path(args.segmentation, args.dataset, segmentation_dir, "--segmentation")
     args.annotation = resolve_path(args.annotation, args.dataset, annotation_dir, "--annotation")
     args.manual = resolve_path(args.manual, args.dataset, annotation_manual_dir, "--manual")
     validate_args(args)

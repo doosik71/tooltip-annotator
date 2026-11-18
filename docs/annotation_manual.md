@@ -4,18 +4,20 @@
 
 ## 왜 따로 관리하는가
 
-파이프라인이 만드는 산출물 중 `annotation-manual`만이 **다시 만들어낼 수 없다.**
+`annotation-manual`은 사람이 직접 한 작업이라 **다시 만들어낼 수 없다.**
 
-| 산출물                   | 생성 주체               | 재생성 |
-| ------------------------ | ----------------------- | ------ |
-| `images/`                | `generate-dataset`      | 가능   |
-| `segmentation/`          | `generate-segmentation` | 가능   |
-| `annotation/`            | `generate-annotation`   | 가능   |
-| **`annotation-manual/`** | **사람**                | **불가** |
+| 산출물                   | 생성 주체                     | 재생성 |
+| ------------------------ | ----------------------------- | ------ |
+| `images/`                | `generate-dataset`            | 가능   |
+| `segmentation/`          | `generate-segmentation`       | 가능   |
+| `annotation-monai/`      | `generate-annotation-monai`   | 가능   |
+| `annotation-qwen/`       | `generate-annotation-qwen`    | 가능   |
+| `annotation/`            | `annotation-editor` (사람의 선택) | **불가** |
+| **`annotation-manual/`** | **사람**                      | **불가** |
 
-`annotation/`은 `annotation-manual`에 있는 프레임은 그대로 복사하고 나머지는 마스크에서 계산한 결과다. 즉 `annotation-manual`과 `segmentation`만 있으면 `annotation` 전체를 언제든 복원할 수 있다. 반대로 `annotation-manual`을 잃으면 그 작업은 사람이 다시 해야 한다.
+`annotation-manual`을 잃으면 그 작업은 사람이 다시 해야 한다. 그래서 이 디렉터리를 별도 저장소로 떼어 보관한다.
 
-그래서 이 디렉터리만 별도 저장소로 떼어 보관한다.
+`annotation/`도 재생성할 수 없다. 편집기에서 프레임마다 어느 자동 결과를 채택했는지가 기록되는 곳이고, 이 선택을 다시 계산해 주는 스크립트는 없다. 현재 `annotation/`은 이 라벨 저장소에 포함되지 않으므로 따로 백업해야 한다(아래 "백업 대상" 참고).
 
 ## 구조
 
@@ -28,7 +30,8 @@ tooltip-annotator/                      # 저장소 A (코드)
         ├── cholec80/
         │   ├── images/                 # 추적 안 함 (재생성 가능)
         │   ├── segmentation/           # 추적 안 함 (재생성 가능)
-        │   ├── annotation/             # 추적 안 함 (재생성 가능)
+        │   ├── annotation-monai/       # 추적 안 함 (재생성 가능)
+        │   ├── annotation/             # 추적 안 함 (재생성 불가, 따로 백업)
         │   └── annotation-manual/      # 저장소 B (독립)
         │       └── .git/
         └── erop/
@@ -70,11 +73,7 @@ git clone https://github.com/doosik71/cholec80-annotation-manual.git \
   data/dataset/cholec80/annotation-manual
 ```
 
-클론 후 `generate-annotation`을 한 번 실행하면 받아온 보정 내용이 `annotation/`에 반영된다.
-
-```bash
-python -m scripts.generate-annotation --dataset cholec80
-```
+클론한 보정 내용은 편집기의 `Manual` 탭에서 바로 볼 수 있다. 다만 `annotation/`에 자동으로 반영되지는 않는다. 수동 보정본을 `annotation/`에 일괄로 다시 반영하는 스크립트는 현재 없으며, 편집기에서 프레임을 열어 저장해야 `annotation/`에 기록된다.
 
 ### 일상 작업
 
@@ -88,7 +87,7 @@ git commit -m "Correct 20 frames in train"
 git push
 ```
 
-`annotation/` 쪽 사본은 생성물이므로 커밋 대상이 아니다. 편집기가 자동으로 맞춰 둔다.
+편집기는 보정본을 저장할 때 같은 내용을 `annotation/`에도 쓴다. `annotation/`은 이 라벨 저장소의 커밋 대상이 아니다.
 
 ### 새 데이터셋에 보정 저장소 만들기
 
@@ -113,27 +112,29 @@ git push -u origin main
 
 편집기 좌측 목록에서 보정된 프레임은 노란색으로 강조되므로, 보정했던 데이터셋을 열었는데 노란 줄이 하나도 없다면 클론을 빠뜨린 것이다.
 
-`generate-annotation`의 출력으로도 확인할 수 있다.
+`count-dataset`의 출력으로도 split별 manual 레이블 수를 확인할 수 있다.
 
-```text
-train: saved=0, skipped=71032, manual=306 (restored=0)
+```bash
+uv run python -m scripts.count-dataset --dataset cholec80
 ```
 
-`manual` 값이 기대한 보정 건수와 맞는지 보면 된다.
+### `annotation/`과 `annotation-manual/`을 직접 고치지 않는다
 
-### `annotation/`을 직접 고치지 않는다
-
-`annotation/`은 생성물이다. 직접 편집해도 다음 `generate-annotation` 실행 때 `annotation-manual`의 내용으로 되돌아간다. 수정은 반드시 `annotation-editor`로 한다.
+두 디렉터리는 `annotation-editor`가 함께 맞춰 쓴다. 한쪽만 손으로 고치면 두 디렉터리가 어긋난다. 수정은 반드시 `annotation-editor`로 한다.
 
 ### `annotation-manual` 디렉터리를 미리 만들지 않는다
 
-`git clone`은 비어 있지 않은 디렉터리를 거부한다. 편집기와 `generate-annotation`은 이 디렉터리를 미리 만들지 않으므로, 보정을 시작하기 전까지는 경로가 비어 있다.
+`git clone`은 비어 있지 않은 디렉터리를 거부한다. 편집기는 이 디렉터리를 미리 만들지 않으므로, 보정을 시작하기 전까지는 경로가 비어 있다.
 
-### 백업 대상은 이 저장소뿐이다
+### 백업 대상
 
-`images`, `segmentation`, `annotation`은 전부 재생성 가능하다. 백업과 이관에서 챙겨야 할 것은 각 데이터셋의 `annotation-manual` 저장소뿐이다.
+`images`, `segmentation`, `annotation-monai`, `annotation-qwen` 같은 자동 annotation은 전부 재생성 가능하다. 백업과 이관에서 챙겨야 할 것은 다음 두 가지다.
+
+- 각 데이터셋의 `annotation-manual` 저장소
+- 각 데이터셋의 `annotation/` 디렉터리. 편집기에서 채택한 자동 결과가 여기에만 기록되며, 현재는 git 저장소로 관리되지 않는다
 
 ## 관련 문서
 
-- [annotation_editor.md](./annotation_editor.md) — 보정 작업에 쓰는 GUI 편집기
-- [generate_annotation.md](./generate_annotation.md) — 자동 생성과 보정본 적용 규칙
+- [annotation_editor.md](./annotation_editor.md) — 자동 결과 채택과 보정에 쓰는 GUI 편집기
+- [generate_annotation_monai.md](./generate_annotation_monai.md) — mask 기반 자동 annotation
+- [generate_annotation_qwen.md](./generate_annotation_qwen.md) — VLM 기반 자동 annotation

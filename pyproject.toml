@@ -15,6 +15,13 @@ dependencies = [
     "numpy>=2.2,<3",
     "opencv-python>=4.10,<5",
     "tqdm>=4.67,<5",
+
+    # generate-annotation-qwen.py (Qwen3-VL)
+    "transformers>=4.57",
+    "accelerate>=1.0",
+
+    # generate-annotation-opus.py (Anthropic API)
+    "anthropic>=1.0",
 ]
 
 [tool.uv.sources]

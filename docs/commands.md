@@ -24,9 +24,9 @@ uv run python -m scripts.generate-dataset --dataset erop
 uv run python -m scripts.generate-segmentation --dataset erop --device cuda:0
 
 # 6) erop bbox/tip annotation 자동 생성
-uv run python -m scripts.generate-annotation --dataset erop
+uv run python -m scripts.generate-annotation-monai --dataset erop
 
-# 7) erop annotation 수동 보정 (GUI)
+# 7) erop 자동 annotation 채택 및 수동 보정 (GUI)
 uv run python -m scripts.annotation-editor --dataset erop
 
 # --- cholec80 ---
@@ -41,7 +41,7 @@ uv run python -m scripts.generate-dataset --dataset cholec80 --frame 25
 uv run python -m scripts.generate-segmentation --dataset cholec80 --device cuda:0
 
 # 11) cholec80 bbox/tip annotation 자동 생성
-uv run python -m scripts.generate-annotation --dataset cholec80
+uv run python -m scripts.generate-annotation-monai --dataset cholec80
 
 # 12) cholec80 annotation 수동 보정 (GUI)
 uv run python -m scripts.annotation-editor --dataset cholec80

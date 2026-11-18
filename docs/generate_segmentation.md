@@ -8,7 +8,7 @@
 
 ### 목적
 
-`generate-dataset.py`로 만든 이미지 데이터셋의 각 프레임에 대해, 학습된 모델로 도구(tool) 영역을 분할한 binary mask를 생성한다. 이 mask는 다음 단계인 `generate-annotation.py`의 입력이 된다.
+`generate-dataset.py`로 만든 이미지 데이터셋의 각 프레임에 대해, 학습된 모델로 도구(tool) 영역을 분할한 binary mask를 생성한다. 이 mask는 다음 단계인 `generate-annotation-monai.py`의 입력이 된다.
 
 이 프로젝트의 기본 작업 순서에서 이 스크립트의 위치는 다음과 같다.
 
@@ -16,7 +16,7 @@
 2. `scripts/download-model.py`로 `./temp/models/model.pt` 준비(데이터셋과 무관한 공용 모델)
 3. (GPU 사용 시) `scripts/check-cuda.py`로 CUDA/cuDNN 환경 점검
 4. `scripts/generate-segmentation.py --dataset <name>`로 mask 생성
-5. `scripts/generate-annotation.py --dataset <name>`로 bbox/tip annotation 생성
+5. `scripts/generate-annotation-monai.py --dataset <name>`로 bbox/tip annotation 생성 (`annotation-monai`)
 
 ### 실행 전 요구 사항
 

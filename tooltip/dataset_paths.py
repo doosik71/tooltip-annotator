@@ -6,8 +6,9 @@ Data layout convention:
     data/dataset/<name>/progressive/    deinterlaced/reencoded videos
     data/dataset/<name>/images/         extracted frames (train/val/test)
     data/dataset/<name>/segmentation/   binary masks (train/val/test)
-    data/dataset/<name>/annotation/     bbox/tip JSON (train/val/test), generated
+    data/dataset/<name>/annotation/     final bbox/tip JSON (train/val/test), kept by annotation-editor
     data/dataset/<name>/annotation-manual/  hand-corrected JSON, never generated
+    data/dataset/<name>/annotation-<tool>/  automatic labeller output, e.g. annotation-monai
     data/dataset/<name>/screenshot/     editor screenshots with overlays
 """
 from __future__ import annotations
@@ -41,9 +42,8 @@ def annotation_dir(name: str) -> Path:
 def annotation_manual_dir(name: str) -> Path:
     """Hand-corrected annotations, the one artifact no script can regenerate.
 
-    `generate-annotation` reads this tree and copies each file it finds over
-    its generated counterpart in `annotation_dir()`; only `annotation-editor`
-    ever writes here.
+    Only `annotation-editor` writes here, and it mirrors every saved file into
+    `annotation_dir()`.
     """
     return DATA_ROOT / "dataset" / name / "annotation-manual"
 

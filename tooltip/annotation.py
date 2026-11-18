@@ -1,20 +1,19 @@
 """Shared bbox/tip annotation computation and JSON payload helpers.
 
-`scripts/generate-annotation.py` builds the automatic annotations from
-segmentation masks. `scripts/annotation-editor.py` reuses the very same code to
-recompute a frame when the user reverts a manual edit back to the automatic
-result, so the two paths cannot drift apart.
+`scripts/generate-annotation-monai.py` builds the automatic annotations from
+segmentation masks. `scripts/annotation-editor.py` shares the payload and
+writing helpers when it saves a manual edit.
 
 Payload provenance
 ------------------
 
 Every payload carries a ``source`` field naming what produced it:
 
-- ``"tooltip-annotator/scripts/generate-annotation.py"`` (`SOURCE_MASK`)
-  written by `generate-annotation` (and by `annotation-editor`'s revert),
-  freely regenerated from masks.
-- ``"manual"`` written by `annotation-editor`, stored in the separate
-  ``annotation-manual/`` tree and never overwritten by `generate-annotation`.
+- ``"tooltip-annotator/scripts/generate-annotation-monai.py"`` (`SOURCE_MASK`)
+  written by `generate-annotation-monai` into ``annotation-monai/``, freely
+  regenerated from masks.
+- ``"manual"`` written by `annotation-editor` into ``annotation-manual/`` and
+  mirrored into ``annotation/``.
 - any other string: an automatic labeller outside this project, e.g. the
   path of the detector checkpoint the parent repository relabelled with.
 
@@ -48,7 +47,7 @@ else:
 
 ANNOTATION_SUFFIX = ".json"
 # The path, from the parent repository root, of the script that writes these.
-SOURCE_MASK = "tooltip-annotator/scripts/generate-annotation.py"
+SOURCE_MASK = "tooltip-annotator/scripts/generate-annotation-monai.py"
 SOURCE_LEGACY_AUTO = "auto"
 SOURCE_MANUAL = "manual"
 
