@@ -16,8 +16,6 @@ Output follows the annotation JSON format of this project (see
 ``data/dataset/<dataset>/annotation-qwen2.5/{train,val,test}``. Each payload
 also records the local model that produced it under ``"model"``, and each
 annotation carries the instrument name the model gave under ``"label"``.
-With ``--save-raw`` the model's unparsed answer for each processed frame is
-kept as well, under ``data/dataset/<dataset>/annotation-qwen2.5-raw/``.
 
 An instrument may show two distal ends, e.g. the open jaws of a grasper,
 scissors or bipolar forceps. Its annotation then carries the second end under
@@ -104,9 +102,6 @@ def annotation_qwen25_dir(name: str) -> Path:
     return DATA_ROOT / "dataset" / name / "annotation-qwen2.5"
 
 
-def annotation_qwen25_raw_dir(name: str) -> Path:
-    return DATA_ROOT / "dataset" / name / "annotation-qwen2.5-raw"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -186,20 +181,6 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Annotate again images whose JSON already exists instead of skipping them.",
-    )
-    parser.add_argument(
-        "--save-raw",
-        action="store_true",
-        help=(
-            "Also save the model's raw answer for every processed image, "
-            "including the ones that could not be parsed, for debugging."
-        ),
-    )
-    parser.add_argument(
-        "--raw-output",
-        type=Path,
-        default=None,
-        help="Root directory for --save-raw files. Defaults to data/dataset/<dataset>/annotation-qwen2.5-raw.",
     )
     return parser.parse_args()
 
@@ -503,39 +484,6 @@ def annotate_batch(
     return [(answer, *size) for answer, size in zip(answers, sizes)]
 
 
-def write_raw_answer(
-    path: Path,
-    image_path: Path,
-    answer: str,
-    size: tuple[int, int, int, int],
-    args: argparse.Namespace,
-    error: str | None,
-    annotations: list[dict[str, object]] | None,
-) -> None:
-    """Keep the model's answer exactly as generated, with what is needed to replay it.
-
-    ``answer`` is in model-input coordinates (``input_width`` x
-    ``input_height``); ``annotations`` is what this script made of it in frame
-    coordinates, or null when the answer could not be parsed (see ``error``).
-    """
-    width, height, input_w, input_h = size
-    record = {
-        "image": image_path.name,
-        "model": args.model_id,
-        "width": width,
-        "height": height,
-        "input_width": input_w,
-        "input_height": input_h,
-        "batch_size": args.batch_size,
-        "max_new_tokens": args.max_new_tokens,
-        "prompt": PROMPT_TEMPLATE.format(width=input_w, height=input_h),
-        "answer": answer,
-        "error": error,
-        "annotations": annotations,
-    }
-    path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
-
-
 def process_split(
     split_name: str,
     args: argparse.Namespace,
@@ -547,9 +495,6 @@ def process_split(
     input_dir = args.input / split_name
     output_dir = args.output / split_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    raw_dir = args.raw_output / split_name if args.save_raw else None
-    if raw_dir is not None:
-        raw_dir.mkdir(parents=True, exist_ok=True)
 
     image_paths = list_images(input_dir)
     counts = {"saved": 0, "skipped": 0, "failed": 0}
@@ -577,17 +522,6 @@ def process_split(
             except ValueError as exc:
                 error = str(exc)
 
-            if raw_dir is not None:
-                write_raw_answer(
-                    raw_dir / f"{image_path.stem}{ANNOTATION_SUFFIX}",
-                    image_path=image_path,
-                    answer=answer,
-                    size=(width, height, input_w, input_h),
-                    args=args,
-                    error=error,
-                    annotations=None if error else annotations,
-                )
-
             if error is not None:
                 # Leave no annotation behind so the next run retries this frame.
                 counts["failed"] += 1
@@ -613,10 +547,6 @@ def main() -> int:
     args = parse_args()
     args.input = resolve_path(args.input, args.dataset, images_dir, "--input")
     args.output = resolve_path(args.output, args.dataset, annotation_qwen25_dir, "--output")
-    if args.save_raw:
-        args.raw_output = resolve_path(
-            args.raw_output, args.dataset, annotation_qwen25_raw_dir, "--raw-output"
-        )
     if args.model_dir is None:
         args.model_dir = MODELS_ROOT / args.model_id.split("/")[-1]
     validate_args(args)
@@ -647,4 +577,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted. Files saved so far are kept; run the same command again to continue.")
+        raise SystemExit(130)

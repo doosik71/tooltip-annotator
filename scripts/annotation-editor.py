@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import shutil
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import tkinter as tk
 from tkinter import font as tkfont, messagebox, ttk
@@ -54,12 +55,34 @@ MIN_BOX_SIZE = 4
 HANDLE_CURSOR = "crosshair"
 HANDLE_HOVER_FILL = "#ffffff"
 
-# Manually corrected frames are highlighted in the image list. tk.Listbox has no
-# per-item font option, so colour is the only way to make them stand out.
-MANUAL_ITEM_BACKGROUND = "#ffe9a8"
-MANUAL_ITEM_FOREGROUND = "#1a1a1a"
-MANUAL_ITEM_SELECT_BACKGROUND = "#e8a33d"
-MANUAL_ITEM_SELECT_FOREGROUND = "#1a1a1a"
+# Image list rows are coloured by their Source column: the n-th tab after
+# Default (Manual, then each annotation-* tab) takes the n-th background. Tabs
+# beyond the palette and rows matching no tab keep the default colours. The
+# selected row always takes the theme's selection colours, which override tag
+# colours.
+SOURCE_ROW_BACKGROUNDS = (
+    "#ffe9a8",  # Manual: yellow
+    "#cfe6ff",  # sky
+    "#d3f2d3",  # green
+    "#f5d3f5",  # pink
+    "#ffd9c2",  # peach
+    "#e0d9ff",  # lavender
+    "#cff2ec",  # mint
+    "#f9d2d2",  # rose
+    "#e6f2b8",  # lime
+    "#eee3cf",  # sand
+)
+SOURCE_ROW_FOREGROUND = "#1a1a1a"
+
+# Image list columns, in pixels. The Source column names the tab whose labels
+# annotation/ holds for the frame (see default_source()).
+LIST_NUMBER_COLUMN_WIDTH = 80
+LIST_IMAGE_COLUMN_WIDTH = 230
+LIST_SOURCE_COLUMN_WIDTH = 80
+# Source cells are filled only for rows on screen, in a worker thread, shortly
+# after the list stops scrolling; finished work is picked up by polling.
+SOURCE_UPDATE_DELAY_MS = 50
+SOURCE_POLL_MS = 30
 
 # A thin strip beside the list scrollbar marks where manual frames and the
 # current frame sit in the whole list, like the overview ruler in VS Code.
@@ -71,7 +94,7 @@ LIST_MARKER_VISIBLE_ALPHA = 0.3
 # A large split shows well under one pixel's worth of rows, so the visible-range
 # box is drawn at least this tall to stay findable.
 LIST_MARKER_VISIBLE_MIN_HEIGHT = 8
-LIST_MARKER_MANUAL_COLOR = MANUAL_ITEM_SELECT_BACKGROUND
+LIST_MARKER_MANUAL_COLOR = "#e8a33d"
 LIST_MARKER_CURRENT_COLOR = "#1565c0"
 
 # The tool number drawn on each bbox, as a multiple of the canvas default font.
@@ -116,6 +139,14 @@ MAX_TAB_SHORTCUTS = 9
 # leaves the tabs too narrow to hit comfortably.
 TAB_STYLE = "Source.TNotebook"
 TAB_PADDING = (20, 6)
+# The selected tab is drawn in bold on this background so the shown source
+# stands out; the colour matches the current-frame mark in the list strip.
+TAB_SELECTED_BACKGROUND = "#1565c0"
+TAB_SELECTED_FOREGROUND = "#ffffff"
+# A tab without a file for the frame is greyed out on a darker background than
+# the other tabs (#c3c3c3 in the default theme).
+TAB_DISABLED_BACKGROUND = "#a6a6a6"
+TAB_DISABLED_FOREGROUND = "#7a7a7a"
 
 # Screenshots are drawn with OpenCV at the image's own resolution, so these
 # mirror the canvas colours (as RGB) and sizes in image pixels.
@@ -126,6 +157,34 @@ SCREENSHOT_TIP_OUTLINE_COLOR = (122, 0, 0)   # #7a0000
 SCREENSHOT_LINE_WIDTH = 2
 SCREENSHOT_LABEL_FONT_SCALE = 0.8
 SCREENSHOT_LABEL_THICKNESS = 2
+
+
+def read_annotations(path: Path) -> list | None:
+    """The ``annotations`` list of one label file, or None if it is missing or unreadable."""
+    try:
+        return json.loads(path.read_text()).get("annotations")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def default_source(
+    file_name: str,
+    default_dir: Path,
+    candidates: list[tuple[str, Path]],
+) -> str:
+    """Name the first candidate whose labels equal annotation/'s for one frame.
+
+    Only the ``annotations`` lists are compared, so metadata such as
+    ``source``, ``model`` or ``edited_at`` does not matter. Returns "" when
+    annotation/ has no file or no candidate matches.
+    """
+    default = read_annotations(default_dir / file_name)
+    if default is None:
+        return ""
+    for label, directory in candidates:
+        if read_annotations(directory / file_name) == default:
+            return label
+    return ""
 
 
 class AnnotationEditor:
@@ -182,6 +241,15 @@ class AnnotationEditor:
         self.manual_stems: set[str] = set()
         self.manual_indices: set[int] = set()
         self.list_index_width = 1
+        # Source column cache by list index. source_generation is bumped on
+        # every split load so answers for the previous list are dropped.
+        self.default_sources: dict[int, str] = {}
+        self.source_pending: set[int] = set()
+        self.source_generation = 0
+        self.source_update_job: str | None = None
+        # Row tag per Source label, rebuilt with the tabs.
+        self.source_tags: dict[str, str] = {}
+        self.source_executor = ThreadPoolExecutor(max_workers=1)
         self.image_width = 0
         self.image_height = 0
 
@@ -198,7 +266,6 @@ class AnnotationEditor:
         self.canvas_offset_y = 0.0
         self.canvas_image_width = 0
         self.canvas_image_height = 0
-        self.suppress_listbox_event = False
 
         self._build_ui()
         self._bind_events()
@@ -310,13 +377,24 @@ class AnnotationEditor:
         list_frame = ttk.Frame(left_panel)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.image_listbox = tk.Listbox(list_frame, width=46, exportselection=False)
-        self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.image_list = ttk.Treeview(
+            list_frame,
+            columns=("number", "image", "source"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.image_list.heading("number", text="#", anchor=tk.W)
+        self.image_list.heading("image", text="Image", anchor=tk.W)
+        self.image_list.heading("source", text="Source", anchor=tk.W)
+        self.image_list.column("number", width=LIST_NUMBER_COLUMN_WIDTH, stretch=False)
+        self.image_list.column("image", width=LIST_IMAGE_COLUMN_WIDTH, stretch=True)
+        self.image_list.column("source", width=LIST_SOURCE_COLUMN_WIDTH, stretch=False)
+        self.image_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.image_listbox.yview)
+        list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.image_list.yview)
         list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.list_scrollbar = list_scrollbar
-        self.image_listbox.configure(yscrollcommand=self._on_list_scrolled)
+        self.image_list.configure(yscrollcommand=self._on_list_scrolled)
 
         self.list_marker = tk.Canvas(
             list_frame,
@@ -331,7 +409,18 @@ class AnnotationEditor:
 
         # Only the tab strip is used: every tab holds an empty frame and the
         # single canvas below shows whichever annotation source is selected.
-        ttk.Style().configure(f"{TAB_STYLE}.Tab", padding=TAB_PADDING)
+        tab_style = ttk.Style()
+        tab_style.configure(f"{TAB_STYLE}.Tab", padding=TAB_PADDING)
+        self.tab_selected_font = tkfont.nametofont("TkDefaultFont").copy()
+        self.tab_selected_font.configure(weight="bold")
+        # A style's state map replaces the inherited one per option, so the
+        # theme's grey "disabled" foreground has to be restated here.
+        tab_style.map(
+            f"{TAB_STYLE}.Tab",
+            background=[("disabled", TAB_DISABLED_BACKGROUND), ("selected", TAB_SELECTED_BACKGROUND)],
+            foreground=[("disabled", TAB_DISABLED_FOREGROUND), ("selected", TAB_SELECTED_FOREGROUND)],
+            font=[("selected", self.tab_selected_font)],
+        )
         self.tab_notebook = ttk.Notebook(right_panel, style=TAB_STYLE)
         self.tab_notebook.pack(side=tk.TOP, fill=tk.X)
 
@@ -368,17 +457,16 @@ class AnnotationEditor:
     def _bind_events(self) -> None:
         self.dataset_combobox.bind("<<ComboboxSelected>>", self._on_dataset_changed)
         self.split_combobox.bind("<<ComboboxSelected>>", self._on_split_changed)
-        self.image_listbox.bind("<<ListboxSelect>>", self._on_image_selected)
+        self.image_list.bind("<<TreeviewSelect>>", self._on_image_selected)
 
-        # The Listbox class binds <<PrevLine>>/<<NextLine>>, which Tk maps to
-        # Up/Down. Those move the selection themselves and fire
-        # <<ListboxSelect>>, and the toplevel binding below would then move it a
-        # second time. Widget bindings run before class and toplevel ones, so
-        # handling Up/Down here and returning "break" keeps it to one step.
-        # Left/Right need no such guard: their class bindings only scroll
-        # horizontally.
-        self.image_listbox.bind("<Up>", self._on_previous_image_shortcut)
-        self.image_listbox.bind("<Down>", self._on_next_image_shortcut)
+        # The Treeview class binds Up/Down to move the selection itself, which
+        # fires <<TreeviewSelect>>, and the toplevel binding below would then
+        # move it a second time. Widget bindings run before class and toplevel
+        # ones, so handling Up/Down here and returning "break" keeps it to one
+        # step. Left/Right need no such guard: on a flat list their class
+        # bindings only open or close tree items, which do not exist here.
+        self.image_list.bind("<Up>", self._on_previous_image_shortcut)
+        self.image_list.bind("<Down>", self._on_next_image_shortcut)
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
@@ -450,6 +538,7 @@ class AnnotationEditor:
     def _on_close(self) -> None:
         if not self._confirm_leave_current_image():
             return
+        self.source_executor.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
 
     def _on_dataset_changed(self, _event: tk.Event[tk.Misc]) -> None:
@@ -485,16 +574,17 @@ class AnnotationEditor:
         self._load_split(requested_split)
 
     def _on_image_selected(self, _event: tk.Event[tk.Misc]) -> None:
-        if self.suppress_listbox_event:
-            return
-        selection = self.image_listbox.curselection()
+        # <<TreeviewSelect>> is queued, so it also arrives after the code
+        # selects a row itself; by then current_index already names that row
+        # and the check below ignores it.
+        selection = self.image_list.selection()
         if not selection:
             return
         new_index = int(selection[0])
         if new_index == self.current_index:
             return
         if not self._confirm_leave_current_image():
-            self._restore_listbox_selection()
+            self._restore_list_selection()
             return
         self._open_image_at_index(new_index)
 
@@ -597,18 +687,23 @@ class AnnotationEditor:
         # so [00001] in a 71,032-frame split and [1] in a 3-frame one.
         self.list_index_width = len(str(len(self.image_paths))) or 1
 
-        self.suppress_listbox_event = True
-        self.image_listbox.delete(0, tk.END)
+        self.source_generation += 1
+        self.default_sources = {}
+        self.source_pending = set()
+
+        self.image_list.delete(*self.image_list.get_children())
         for index, image_path in enumerate(self.image_paths):
-            self.image_listbox.insert(tk.END, self._listbox_label(index, image_path))
             if image_path.stem in self.manual_stems:
                 self.manual_indices.add(index)
-                self._apply_listbox_style(index, True)
-        self.suppress_listbox_event = False
+            self.image_list.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(self._list_number(index), image_path.name, ""),
+            )
 
         if self.image_paths:
-            self.image_listbox.selection_set(0)
-            self.image_listbox.activate(0)
+            self._select_list_row(0)
             self._open_image_at_index(0)
         else:
             self._update_images_label()
@@ -617,6 +712,7 @@ class AnnotationEditor:
             self._update_status("No images found in the selected split.")
         self._update_buttons()
         self._render_list_markers()
+        self._schedule_source_update()
 
     def _open_image_at_index(self, index: int) -> None:
         self.current_index = index
@@ -664,6 +760,14 @@ class AnnotationEditor:
             frame = ttk.Frame(self.tab_notebook, height=0)
             self.tab_notebook.add(frame, text=text)
             self.tab_frames.append(frame)
+        self.source_tags = {}
+        for index, (label, _root, _kind) in enumerate(self.tabs[DEFAULT_TAB + 1 :]):
+            if index < len(SOURCE_ROW_BACKGROUNDS):
+                tag = f"source-{index}"
+                self.image_list.tag_configure(
+                    tag, background=SOURCE_ROW_BACKGROUNDS[index], foreground=SOURCE_ROW_FOREGROUND
+                )
+                self.source_tags[label] = tag
         self.current_tab = DEFAULT_TAB
         self.preferred_tab = DEFAULT_TAB
         self.tab_notebook.select(DEFAULT_TAB)
@@ -793,6 +897,7 @@ class AnnotationEditor:
                 self._tab_annotation_path(self.current_tab, self.current_image_path),
                 annotation_path,
             )
+            self._refresh_current_source()
             self._update_status(f"Adopted the {label} annotation into annotation/.")
             return
 
@@ -813,6 +918,7 @@ class AnnotationEditor:
         shutil.copyfile(manual_path, annotation_path)
 
         self._set_current_manual_flag(True)
+        self._refresh_current_source()
         self.dirty = False
         # An edit made on an automatic tab is a manual annotation now, so show
         # it under Manual rather than under the source it no longer matches.
@@ -883,36 +989,84 @@ class AnnotationEditor:
             return set()
         return {path.stem for path in manual_dir.glob(f"*{ANNOTATION_SUFFIX}")}
 
-    def _listbox_label(self, index: int, image_path: Path) -> str:
-        marker = "* " if image_path.stem in self.manual_stems else "  "
-        number = f"{index + 1:0{self.list_index_width}d}"
-        return f"{marker}[{number}] {image_path.name}"
+    def _list_number(self, index: int) -> str:
+        """The # column: running number, zero-padded to the split's digit count."""
+        return f"{index + 1:0{self.list_index_width}d}"
 
-    def _apply_listbox_style(self, index: int, is_manual: bool) -> None:
-        """Paint one image-list row according to its provenance.
+    def _select_list_row(self, index: int) -> None:
+        """Select, focus and scroll to one image-list row."""
+        iid = str(index)
+        self.image_list.selection_set(iid)
+        self.image_list.focus(iid)
+        self.image_list.see(iid)
 
-        A row keeps its default colours unless it is manually corrected, so the
-        highlight reads as an exception rather than as theming.
-        """
-        if is_manual:
-            self.image_listbox.itemconfig(
-                index,
-                background=MANUAL_ITEM_BACKGROUND,
-                foreground=MANUAL_ITEM_FOREGROUND,
-                selectbackground=MANUAL_ITEM_SELECT_BACKGROUND,
-                selectforeground=MANUAL_ITEM_SELECT_FOREGROUND,
+    def _schedule_source_update(self) -> None:
+        """Fill the Source cells of the rows on screen once scrolling settles."""
+        if self.source_update_job is None:
+            self.source_update_job = self.root.after(
+                SOURCE_UPDATE_DELAY_MS, self._request_visible_sources
             )
-        else:
-            self.image_listbox.itemconfig(
-                index,
-                background="",
-                foreground="",
-                selectbackground="",
-                selectforeground="",
-            )
+
+    def _source_candidates(self) -> list[tuple[str, Path]]:
+        """(tab label, split directory) of every tab except Default, in tab order."""
+        return [(label, root / self.current_split) for label, root, _kind in self.tabs[DEFAULT_TAB + 1 :]]
+
+    def _request_visible_sources(self) -> None:
+        """Hand the visible rows without a Source value to the worker thread."""
+        self.source_update_job = None
+        total = len(self.image_paths)
+        if total == 0 or not self.tabs:
+            return
+        first, last = (float(value) for value in self.image_list.yview())
+        start = max(int(first * total), 0)
+        end = min(math.ceil(last * total) + 1, total)
+        indices = [
+            index
+            for index in range(start, end)
+            if index not in self.default_sources and index not in self.source_pending
+        ]
+        if not indices:
+            return
+        self.source_pending.update(indices)
+
+        default_dir = self.tabs[DEFAULT_TAB][1] / self.current_split
+        candidates = self._source_candidates()
+        jobs = [(index, f"{self.image_paths[index].stem}{ANNOTATION_SUFFIX}") for index in indices]
+
+        def work() -> list[tuple[int, str]]:
+            return [(index, default_source(name, default_dir, candidates)) for index, name in jobs]
+
+        self._poll_sources(self.source_executor.submit(work), self.source_generation)
+
+    def _poll_sources(self, future: Future, generation: int) -> None:
+        """Write a finished worker answer into the list (Tk is not thread-safe)."""
+        if not future.done():
+            self.root.after(SOURCE_POLL_MS, self._poll_sources, future, generation)
+            return
+        if generation != self.source_generation or future.cancelled():
+            return
+        for index, label in future.result():
+            self.source_pending.discard(index)
+            self._set_list_source(index, label)
+
+    def _set_list_source(self, index: int, label: str) -> None:
+        self.default_sources[index] = label
+        tag = self.source_tags.get(label)
+        self.image_list.item(str(index), tags=(tag,) if tag else ())
+        self.image_list.set(str(index), "source", label)
+
+    def _refresh_current_source(self) -> None:
+        """Recompute the current frame's Source after annotation/ was written."""
+        if self.current_index is None or self.current_image_path is None:
+            return
+        name = f"{self.current_image_path.stem}{ANNOTATION_SUFFIX}"
+        default_dir = self.tabs[DEFAULT_TAB][1] / self.current_split
+        self._set_list_source(
+            self.current_index, default_source(name, default_dir, self._source_candidates())
+        )
 
     def _set_current_manual_flag(self, is_manual: bool) -> None:
-        """Update the `*` marker of the current frame in the image list."""
+        """Record whether the current frame has a manual file, for the list strip."""
         if self.current_image_path is None or self.current_index is None:
             return
 
@@ -924,23 +1078,12 @@ class AnnotationEditor:
             self.manual_indices.discard(self.current_index)
         self._render_list_markers()
 
-        selected = self.current_index in self.image_listbox.curselection()
-        self.suppress_listbox_event = True
-        self.image_listbox.delete(self.current_index)
-        self.image_listbox.insert(
-            self.current_index,
-            self._listbox_label(self.current_index, self.current_image_path),
-        )
-        self._apply_listbox_style(self.current_index, is_manual)
-        if selected:
-            self.image_listbox.selection_set(self.current_index)
-            self.image_listbox.activate(self.current_index)
-        self.suppress_listbox_event = False
-
     def _on_list_scrolled(self, first: str, last: str) -> None:
-        """Forward the list's visible range to the scrollbar and the marker strip."""
+        """Forward the list's visible range to the scrollbar, the marker strip
+        and the Source column."""
         self.list_scrollbar.set(first, last)
         self._render_list_markers()
+        self._schedule_source_update()
 
     def _fit_list_marker_to_trough(self) -> None:
         """Pad the marker strip so it spans only the scrollbar's scroll area.
@@ -995,7 +1138,7 @@ class AnnotationEditor:
         # 2. The rows currently shown in the list, as a translucent box. It
         # uses the same scale as the marks, so a mark inside the box is a row
         # on screen, which the scrollbar thumb cannot show exactly.
-        first, last = self.image_listbox.yview()
+        first, last = (float(value) for value in self.image_list.yview())
         top = first * height
         bottom = last * height
         if bottom - top < LIST_MARKER_VISIBLE_MIN_HEIGHT:
@@ -1217,8 +1360,9 @@ class AnnotationEditor:
         """Pop up the tool actions for the right-clicked or selected tool.
 
         A right click on a tool selects it first, like a left click. With a tool
-        selected the menu offers Delete Tool and Add/Remove Second Tip; with
-        none it offers Add Tool.
+        selected the menu offers Add or Remove Second Tip, whichever applies,
+        then Delete Tool; with none it offers Add Tool. Cancel, Esc or a click
+        outside closes it.
         """
         if self.current_image_rgb is None or self.mode == "add":
             return "break"
@@ -1236,27 +1380,32 @@ class AnnotationEditor:
             self._update_buttons()
             self._render_scene()
 
+        # Only the actions that apply are listed: the second-tip action, then
+        # the tool action, then Cancel.
         menu = tk.Menu(self.root, tearoff=False)
         if self.selected_annotation_index is None:
             menu.add_command(label="Add Tool", command=self._enter_add_mode)
         else:
-            has_tip2 = "tip2" in self.current_annotations[self.selected_annotation_index]
-            menu.add_command(label="Delete Tool", command=self._delete_selected)
-            menu.add_separator()
+            if "tip2" in self.current_annotations[self.selected_annotation_index]:
+                menu.add_command(label="Remove Second Tip", command=self._remove_second_tip)
+            else:
+                menu.add_command(
+                    label="Add Second Tip", command=lambda: self._add_second_tip(image_x, image_y)
+                )
+            delete_color = BUTTON_STYLES["Delete.TButton"]
             menu.add_command(
-                label="Add Second Tip",
-                command=lambda: self._add_second_tip(image_x, image_y),
-                state=tk.DISABLED if has_tip2 else tk.NORMAL,
+                label="Delete Tool",
+                command=self._delete_selected,
+                foreground=delete_color,
+                activeforeground=delete_color,
             )
-            menu.add_command(
-                label="Remove Second Tip",
-                command=self._remove_second_tip,
-                state=tk.NORMAL if has_tip2 else tk.DISABLED,
-            )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+        # Choosing Cancel just closes the menu.
+        menu.add_separator()
+        menu.add_command(label="Cancel")
+        # tk_popup returns at once on X11 and the menu keeps its grab until it
+        # closes, so a click anywhere outside the menu closes it. Releasing the
+        # grab here would leave the menu open until an entry is chosen.
+        menu.tk_popup(event.x_root, event.y_root)
         return "break"
 
     def _add_second_tip(self, image_x: float, image_y: float) -> None:
@@ -1312,15 +1461,10 @@ class AnnotationEditor:
         if new_index < 0 or new_index >= len(self.image_paths):
             return
         if not self._confirm_leave_current_image():
-            self._restore_listbox_selection()
+            self._restore_list_selection()
             return
 
-        self.suppress_listbox_event = True
-        self.image_listbox.selection_clear(0, tk.END)
-        self.image_listbox.selection_set(new_index)
-        self.image_listbox.activate(new_index)
-        self.image_listbox.see(new_index)
-        self.suppress_listbox_event = False
+        self._select_list_row(new_index)
         self._open_image_at_index(new_index)
 
     def _on_canvas_press(self, event: tk.Event[tk.Misc]) -> None:
@@ -1685,14 +1829,10 @@ class AnnotationEditor:
             return not self.dirty
         return True
 
-    def _restore_listbox_selection(self) -> None:
+    def _restore_list_selection(self) -> None:
         if self.current_index is None:
             return
-        self.suppress_listbox_event = True
-        self.image_listbox.selection_clear(0, tk.END)
-        self.image_listbox.selection_set(self.current_index)
-        self.image_listbox.activate(self.current_index)
-        self.suppress_listbox_event = False
+        self._select_list_row(self.current_index)
 
     def _list_images(self, image_dir: Path) -> list[Path]:
         if not image_dir.exists():

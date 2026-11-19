@@ -25,7 +25,7 @@ segmentation mask에서 tip을 기하학적으로 계산하는 `generate-annotat
 비교와 재현을 위해 Qwen2.5-VL을 쓰던 이전 버전을 `scripts/generate-annotation-qwen25.py`로 남겨 두었다. 옵션과 처리 방식은 이전 그대로이고 출력 위치만 다르다.
 
 - 기본 모델: `Qwen/Qwen2.5-VL-7B-Instruct` (`data/models/Qwen2.5-VL-7B-Instruct`)
-- 출력: `data/dataset/<dataset>/annotation-qwen2.5`, `--save-raw` 출력: `data/dataset/<dataset>/annotation-qwen2.5-raw`
+- 출력: `data/dataset/<dataset>/annotation-qwen2.5`
 - 이미지를 28px 배수로 리사이즈하고, 모델이 답한 픽셀 좌표를 원본 크기로 다시 스케일한다.
 - 프롬프트에 구체적인 예시 값이 그대로 남아 있다. 모델이 이 값을 베껴 답하는 문제가 있으므로 새 레이블 생성에는 권하지 않는다.
 
@@ -63,8 +63,6 @@ uv run python -m scripts.generate-annotation-qwen --dataset cholec80 --device cu
 - `--max-new-tokens`: 이미지당 생성 길이 한도. 기본값 `512`.
 - `--attn`: attention 구현(`sdpa`, `flash_attention_2`, `eager`). 기본값 `sdpa`.
 - `--overwrite`: 이미 있는 JSON도 다시 생성한다.
-- `--save-raw`: 처리한 이미지마다 모델 원문 답변을 따로 저장한다(디버깅용). 파싱에 실패한 프레임도 저장된다.
-- `--raw-output`: `--save-raw` 저장 위치. 기본값 `data/dataset/<dataset>/annotation-qwen-raw`.
 
 ## 처리 방식
 
@@ -114,25 +112,3 @@ uv run python -m scripts.generate-annotation-qwen --dataset cholec80 --device cu
 ## 처리 시간
 
 이미지당 대략 수백 ms~수 초가 걸린다(GPU, batch 크기, 도구 수에 따라 다름). cholec80 전체(약 18.4만 장)는 수십 시간 이상 걸릴 수 있으므로 `--splits`, `--limit`으로 나눠 실행하는 것을 권장한다. 기존 파일은 건너뛰므로 언제든 중단하고 이어서 실행할 수 있다.
-
-## 원문 답변 저장 (`--save-raw`)
-
-모델이 실제로 무엇을 답했는지 확인하기 위한 디버깅 옵션이다. 이번 실행에서 실제로 처리한 프레임만 저장되므로, 이미 annotation이 있는 프레임을 다시 보려면 `--overwrite`를 함께 준다.
-
-```bash
-uv run python -m scripts.generate-annotation-qwen --dataset cholec80 --splits val --limit 50 --device cuda:1 --overwrite --save-raw
-```
-
-`annotation-qwen-raw/{split}/{stem}.json`에 다음 내용이 저장된다.
-
-| 필드 | 내용 |
-| --- | --- |
-| `image`, `width`, `height` | 원본 프레임 이름과 크기 |
-| `coordinate_range` | `answer` 좌표의 범위(`1000`). `answer`의 좌표는 0~이 값으로 정규화되어 있다 |
-| `model`, `batch_size`, `max_new_tokens` | 실행 조건 (batch 크기에 따른 차이 비교용) |
-| `prompt` | 모델에 준 프롬프트 전문 |
-| `answer` | 모델이 생성한 답변 원문 그대로 |
-| `error` | 파싱 실패 사유. 성공하면 `null` |
-| `annotations` | 스크립트가 `answer`를 후처리한 결과(원본 프레임 좌표). 실패하면 `null` |
-
-`answer`와 `annotations`를 비교하면 모델이 애초에 몇 개를 답했는지, 후처리(clamp, 작은 box 제거, 중복 병합)에서 무엇이 바뀌었는지 구분할 수 있다.

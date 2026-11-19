@@ -1,13 +1,15 @@
-"""Print per-dataset train/val/test frame counts and manual/auto label counts.
+"""Print per-dataset train/val/test frame counts and label counts per source.
 
 For each split of each dataset under data/dataset/:
 
-- frames: image files in images/{split}/, and their share of the dataset.
-- manual: frames with a label in annotation-manual/{split}/ (human corrected).
-- auto:   frames with a label in annotation/{split}/ but none in
-          annotation-manual/{split}/ (generated, incl. detector relabels).
+- frames:  image files in images/{split}/, and their share of the dataset.
+- default: frames with a label in annotation/{split}/ (final labels kept by
+           annotation-editor).
+- manual:  frames with a label in annotation-manual/{split}/ (human corrected).
+- one column per other annotation-<name>/ directory (monai, opus, qwen, ...),
+  found on disk like the editor's tabs.
 
-The manual/auto ratios are relative to the split's frame count.
+Label ratios are relative to the split's frame count.
 """
 from __future__ import annotations
 
@@ -26,13 +28,15 @@ from tooltip.dataset_paths import (
 
 SPLIT_NAMES = ("train", "val", "test")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+AUTO_DIR_PREFIX = "annotation-"
+CELL_WIDTH = 17
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Print train/val/test frame counts and manual/auto label counts "
-            "for each dataset."
+            "Print train/val/test frame counts and label counts for every "
+            "annotation source of each dataset."
         )
     )
     parser.add_argument(
@@ -59,31 +63,39 @@ def stems(directory: Path, extensions: set[str]) -> set[str]:
 def cell(part: int, whole: int) -> str:
     """`part` followed by its share of `whole` in parentheses."""
     ratio = f"{100.0 * part / whole:5.1f}%" if whole else "     -"
-    return f"{part:>9,} ({ratio})"
+    return f"{part:>8,} ({ratio})"
+
+
+def annotation_sources(dataset: str) -> list[tuple[str, Path]]:
+    """(column name, root) for default, manual, then each annotation-<name>/ dir."""
+    default_root = annotation_dir(dataset)
+    manual_root = annotation_manual_dir(dataset)
+    sources = [("default", default_root), ("manual", manual_root)]
+    for path in sorted(default_root.parent.glob(f"{AUTO_DIR_PREFIX}*")):
+        if not path.is_dir() or path.name == manual_root.name:
+            continue
+        sources.append((path.name.removeprefix(AUTO_DIR_PREFIX), path))
+    return sources
 
 
 def report(dataset: str) -> None:
+    sources = annotation_sources(dataset)
     rows = []
     for split in SPLIT_NAMES:
-        frames = stems(images_dir(dataset) / split, IMAGE_EXTENSIONS)
-        labels = stems(annotation_dir(dataset) / split, {ANNOTATION_SUFFIX})
-        manual = stems(annotation_manual_dir(dataset) / split, {ANNOTATION_SUFFIX})
-        rows.append((split, len(frames), len(manual), len(labels - manual)))
+        counts = [len(stems(images_dir(dataset) / split, IMAGE_EXTENSIONS))]
+        counts += [len(stems(root / split, {ANNOTATION_SUFFIX})) for _, root in sources]
+        rows.append((split, counts))
 
-    total = tuple(sum(row[i] for row in rows) for i in (1, 2, 3))
-    rows.append(("total", *total))
-    n_total = total[0]
+    totals = [sum(counts[i] for _, counts in rows) for i in range(len(sources) + 1)]
+    rows.append(("total", totals))
+    n_total = totals[0]
 
+    names = ["frames", *(name for name, _ in sources)]
     print(f"[{dataset}]")
-    print(
-        f"  {'split':<6} {'frames (ratio)':>18}"
-        f"   {'manual (ratio)':>18}   {'auto (ratio)':>18}"
-    )
-    for split, n_frames, n_manual, n_auto in rows:
-        print(
-            f"  {split:<6} {cell(n_frames, n_total)}"
-            f"   {cell(n_manual, n_frames)}   {cell(n_auto, n_frames)}"
-        )
+    print(f"  {'split':<6}" + "".join(f"  {name + ' (ratio)':>{CELL_WIDTH}}" for name in names))
+    for split, (n_frames, *n_labels) in rows:
+        cells = [cell(n_frames, n_total), *(cell(n, n_frames) for n in n_labels)]
+        print(f"  {split:<6}" + "".join(f"  {c:>{CELL_WIDTH}}" for c in cells))
     print()
 
 

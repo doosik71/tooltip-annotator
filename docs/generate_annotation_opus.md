@@ -5,23 +5,40 @@
 ## 요구 사항
 
 - `uv sync` (`anthropic` 패키지 추가됨)
-- 환경 변수 `ANTHROPIC_API_KEY`에 Anthropic API 키
+- Anthropic 인증 정보: 환경 변수 `ANTHROPIC_API_KEY` 또는 `ant auth login`으로 저장한 프로필 (아래 "인증" 참고)
 - 입력 이미지 `data/dataset/<name>/images/{train,val,test}`
 - GPU 불필요
+
+## 인증
+
+스크립트는 키를 직접 읽지 않고 Anthropic SDK가 찾은 인증 정보를 쓴다. SDK는 다음 순서로 찾으며 먼저 찾은 것을 쓴다.
+
+1. 환경 변수 `ANTHROPIC_API_KEY`
+2. 환경 변수 `ANTHROPIC_AUTH_TOKEN`
+3. `ant auth login`으로 저장한 프로필(`~/.config/anthropic/`). 여러 개면 `ANTHROPIC_PROFILE`로 고른다
+
+```bash
+# 방법 1: API 키
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 방법 2: ant CLI 로그인 (한 번만 하면 이후 실행에 환경 변수가 필요 없다)
+ant auth login
+ant auth status   # Credentials 목록에 (active) 항목이 있는지 확인
+```
+
+`ANTHROPIC_API_KEY`가 설정되어 있으면 `ant` 프로필보다 우선하므로, 프로필을 쓰려면 이 변수를 비워 둔다(`unset ANTHROPIC_API_KEY`). 인증 정보를 하나도 찾지 못하면 첫 요청에서 `Could not resolve authentication method` 오류로 멈춘다.
 
 ## 실행 예시
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# 1) 시험 실행: split당 몇 장, 실시간 호출, 원문·토큰 사용량 저장
-uv run python -m scripts.generate-annotation-opus --dataset cholec80 --splits val --limit 20 --save-raw
+# 1) 시험 실행: split당 몇 장, 실시간 호출
+uv run python -m scripts.generate-annotation-opus --dataset cholec80 --splits val --limit 20
 
 # 2) 전체 실행: Batch API(반값). 제출 후 종료하며, 같은 명령을 다시 실행하면 끝난 batch의 결과를 받아 저장한다
 uv run python -m scripts.generate-annotation-opus --dataset cholec80 --mode batch
 
 # 결과가 나올 때까지 기다리며 받으려면
-uv run python -m scripts.generate-annotation-opus --dataset cholec80 --mode batch --wait
+uv run python -m scripts.generate-annotation-opus --dataset cholec80 --splits test --mode batch --wait
 ```
 
 실행이 끝나면 저장/실패 수, 토큰 사용량(입력, thinking을 포함한 출력), 추정 비용과 프레임당 비용을 출력한다. batch 모드의 사용량과 비용은 그 실행에서 결과를 받은 프레임만 집계한다.
@@ -38,7 +55,7 @@ uv run python -m scripts.generate-annotation-opus --dataset cholec80 --mode batc
 - `--batch-requests`: batch 하나에 넣을 최대 요청 수. 기본값 `2000`. 요청마다 이미지가 들어가므로 실제로는 batch당 200MB 한도에서 먼저 잘린다(PNG 프레임 기준 약 450장).
 - `--wait`: batch 모드에서 모든 batch가 끝나 결과를 저장할 때까지 기다린다.
 - `--splits`, `--limit`, `--overwrite`: qwen 스크립트와 같다.
-- `--save-raw`, `--raw-output`: 원문 답변, stop reason, 토큰 사용량을 `annotation-opus-raw/{split}/{stem}.json`에 저장한다.
+- `--limit 0`: 새 요청을 보내지 않는다. batch 모드에서는 이미 제출한 batch 중 끝난 것의 결과만 받아 저장하고, `--wait`를 함께 주면 남은 batch가 모두 끝날 때까지 기다리며 받는다.
 
 ## 처리 방식
 
@@ -53,7 +70,7 @@ uv run python -m scripts.generate-annotation-opus --dataset cholec80 --mode batc
 제출한 batch의 id와 각 요청이 어느 프레임인지는 `data/dataset/<dataset>/annotation-opus-batches.json`에 기록한다. 다시 실행하면
 
 1. 끝난 batch의 결과를 받아 저장하고,
-2. 아직 annotation이 없고 진행 중인 batch에도 들어 있지 않은 프레임만 새로 제출한다.
+2. 아직 annotation이 없고 진행 중인 batch에도 들어 있지 않은 프레임만 새로 제출한다. batch 하나를 제출할 때마다 그사이 끝난 batch의 결과도 받아 저장하므로, 큰 split을 제출하는 데 몇 시간이 걸려도 결과 파일은 제출 도중부터 생긴다.
 
 중간에 멈춰도 같은 명령으로 이어서 진행된다. batch 결과는 제출 후 29일까지만 받을 수 있으므로 그 안에 한 번 이상 다시 실행해야 한다. `--overwrite`와 batch 모드를 함께 쓰면 실행할 때마다 모든 프레임을 다시 제출하므로, 결과를 받는 재실행에는 `--overwrite`를 빼야 한다.
 

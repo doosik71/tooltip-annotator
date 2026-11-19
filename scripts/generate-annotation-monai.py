@@ -164,4 +164,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted. Files saved so far are kept; run the same command again to continue.")
+        raise SystemExit(130)

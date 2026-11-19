@@ -22,7 +22,9 @@ Two ways to call the API:
   ``--wait``, to collect them. Frames already in a submitted batch are not
   submitted twice.
 
-The API key is read from the ``ANTHROPIC_API_KEY`` environment variable.
+Credentials are resolved by the Anthropic SDK: the ``ANTHROPIC_API_KEY`` (or
+``ANTHROPIC_AUTH_TOKEN``) environment variable, or else the profile stored by
+``ant auth login`` (pick one with ``ANTHROPIC_PROFILE``).
 """
 from __future__ import annotations
 
@@ -30,7 +32,6 @@ import argparse
 import base64
 import io
 import json
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -175,9 +176,6 @@ def annotation_opus_dir(name: str) -> Path:
     return DATA_ROOT / "dataset" / name / "annotation-opus"
 
 
-def annotation_opus_raw_dir(name: str) -> Path:
-    return DATA_ROOT / "dataset" / name / "annotation-opus-raw"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -260,23 +258,13 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         default=None,
-        help="Annotate at most this many new images per split (for a quick trial).",
+        help="Annotate at most this many new images per split (for a quick trial). "
+        "0 sends no new requests; in batch mode it only collects submitted batches.",
     )
     parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Annotate again images whose JSON already exists instead of skipping them.",
-    )
-    parser.add_argument(
-        "--save-raw",
-        action="store_true",
-        help="Also save the raw API answer and token usage of every processed image, for debugging.",
-    )
-    parser.add_argument(
-        "--raw-output",
-        type=Path,
-        default=None,
-        help="Root directory for --save-raw files. Defaults to data/dataset/<dataset>/annotation-opus-raw.",
     )
     return parser.parse_args()
 
@@ -290,10 +278,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise RuntimeError(
             "pillow is required to read images. Install it and run the script again."
         ) from PIL_IMPORT_ERROR
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError("Set the ANTHROPIC_API_KEY environment variable to your Anthropic API key.")
-    if args.limit is not None and args.limit < 1:
-        raise ValueError("--limit must be at least 1.")
+    if args.limit is not None and args.limit < 0:
+        raise ValueError("--limit must not be negative.")
     if args.workers < 1 or args.batch_requests < 1:
         raise ValueError("--workers and --batch-requests must be at least 1.")
 
@@ -460,7 +446,6 @@ class Run:
         error: str | None = None,
     ) -> None:
         """Turn one API outcome into an annotation file (or a failure)."""
-        text = None
         usage = usage_dict(message) if message is not None else {}
         for key, value in usage.items():
             self.usage[key] += value
@@ -480,27 +465,6 @@ class Run:
                     annotations = to_annotations(json.loads(text), size)
                 except (ValueError, KeyError, TypeError) as exc:
                     error = f"unreadable answer: {exc}"
-
-        if self.args.save_raw:
-            raw_path = self.args.raw_output / split_name / f"{image_path.stem}{ANNOTATION_SUFFIX}"
-            raw_path.parent.mkdir(parents=True, exist_ok=True)
-            width, height, send_w, send_h = size
-            record = {
-                "image": image_path.name,
-                "model": self.args.model,
-                "effort": self.args.effort,
-                "mode": self.args.mode,
-                "width": width,
-                "height": height,
-                "sent_width": send_w,
-                "sent_height": send_h,
-                "stop_reason": getattr(message, "stop_reason", None),
-                "answer": text,
-                "usage": usage,
-                "error": error,
-                "annotations": annotations,
-            }
-            raw_path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
 
         if error is not None:
             # Leave no annotation behind so the next run retries this frame.
@@ -585,9 +549,15 @@ def run_sync(args: argparse.Namespace, client, run: Run) -> None:
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [pool.submit(call, item) for item in pending]
-        for future in tqdm(as_completed(futures), total=len(futures), unit="image", ascii=True, ncols=100):
-            (split_name, image_path), size, message, error = future.result()
-            run.handle(split_name, image_path, size, message, error)
+        try:
+            for future in tqdm(as_completed(futures), total=len(futures), unit="image", ascii=True, ncols=100):
+                (split_name, image_path), size, message, error = future.result()
+                run.handle(split_name, image_path, size, message, error)
+        except KeyboardInterrupt:
+            # Drop the queued requests; leaving the pool then waits only for the
+            # few already in flight, whose answers are discarded.
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -642,7 +612,8 @@ def collect_batches(args: argparse.Namespace, client, run: Run, state: dict, sta
     return running
 
 
-def submit_batches(args: argparse.Namespace, client, state: dict, state_path: Path) -> int:
+def submit_batches(args: argparse.Namespace, client, run: Run, state: dict, state_path: Path) -> int:
+    """Submit every pending frame in batches, writing the results of ended batches after each submission."""
     in_flight = {
         key for batch in state["batches"] if not batch["collected"] for key in batch["items"].values()
     }
@@ -668,6 +639,8 @@ def submit_batches(args: argparse.Namespace, client, state: dict, state_path: Pa
         save_state(state_path, state)
         submitted += len(requests)
         print(f"Submitted batch {batch.id} ({len(requests)} requests).")
+        # Submitting a large split takes hours; write finished results meanwhile.
+        collect_batches(args, client, run, state, state_path)
 
     requests: list = []
     items: dict[str, str] = {}
@@ -691,7 +664,7 @@ def run_batch(args: argparse.Namespace, client, run: Run) -> None:
     state = load_state(state_path)
 
     collect_batches(args, client, run, state, state_path)
-    submitted = submit_batches(args, client, state, state_path)
+    submitted = submit_batches(args, client, run, state, state_path)
     print(f"Submitted {submitted} new request(s). Batch ids are kept in {state_path}.")
 
     while args.wait:
@@ -708,16 +681,19 @@ def main() -> int:
     args = parse_args()
     args.input = resolve_path(args.input, args.dataset, images_dir, "--input")
     args.output = resolve_path(args.output, args.dataset, annotation_opus_dir, "--output")
-    if args.save_raw:
-        args.raw_output = resolve_path(args.raw_output, args.dataset, annotation_opus_raw_dir, "--raw-output")
     validate_args(args)
 
     client = anthropic.Anthropic(max_retries=5)
     run = Run(args)
-    if args.mode == "sync":
-        run_sync(args, client, run)
-    else:
-        run_batch(args, client, run)
+    try:
+        if args.mode == "sync":
+            run_sync(args, client, run)
+        else:
+            run_batch(args, client, run)
+    except KeyboardInterrupt:
+        print("\nInterrupted. Results saved so far are kept; run the same command again to continue.")
+        run.report()
+        return 130
 
     print("Opus annotation run complete.")
     run.report()

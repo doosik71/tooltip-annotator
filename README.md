@@ -59,6 +59,8 @@ uv sync
     │   │   └── ...
     │   ├── annotation-qwen/     # generate-annotation-qwen 결과 (VLM 기반 자동 annotation)
     │   │   └── ...
+    │   ├── annotation-yolo/     # generate-annotation-yolo 결과 (yolov8stooltip 검출기)
+    │   │   └── ...
     │   └── screenshot/          # (선택) annotation-editor 스크린샷
     └── cholec80/
         └── ... (동일 구조)
@@ -75,6 +77,7 @@ annotation 디렉터리들의 관계는 다음과 같다.
 | `annotation-monai`       | `generate-annotation-monai`     | segmentation mask에서 계산한 순수 자동 결과                 | 가능   |
 | `annotation-qwen`        | `generate-annotation-qwen`      | VLM(Qwen3-VL)이 지정한 순수 자동 결과                       | 가능   |
 | `annotation-qwen2.5`     | `generate-annotation-qwen25`    | 이전 VLM(Qwen2.5-VL) 결과. 비교용                          | 가능   |
+| `annotation-yolo`        | `generate-annotation-yolo`      | 상위 저장소의 yolov8stooltip 검출기 결과                    | 가능   |
 
 자동 annotation 스크립트는 각자 자기 `annotation-<이름>` 디렉터리에만 쓰고, `annotation`과 `annotation-manual`은 건드리지 않는다. `annotation-editor`는 반대로 자동 annotation 디렉터리를 읽기만 하고, 사람이 고르거나 고친 결과를 `annotation`(과 `annotation-manual`)에 쓴다. 따라서 자동 annotation을 다시 실행해도 **최종 레이블과 수동 보정분은 바뀌지 않는다**. 새 자동 annotation 도구는 `annotation-<이름>` 디렉터리에 결과를 쓰기만 하면 편집기에 탭으로 나타난다.
 
@@ -201,6 +204,16 @@ uv run python -m scripts.generate-annotation-qwen --dataset cholec80
 
 문서: [docs/generate_annotation_qwen.md](./docs/generate_annotation_qwen.md)
 
+YOLO(검출기 기반):
+
+```bash
+uv run python -m scripts.generate-annotation-yolo --dataset cholec80 --device cuda:0
+```
+
+기본 출력은 `./data/dataset/cholec80/annotation-yolo/{train,val,test}`이다. 상위 tooltip-detector 저장소의 `standalone/yolov8stooltip` 프로젝트와 학습된 체크포인트가 필요하다.
+
+문서: [docs/generate_annotation_yolo.md](./docs/generate_annotation_yolo.md)
+
 ### 7. GUI 편집기로 annotation 수정
 
 ```bash
@@ -227,7 +240,7 @@ python -m scripts.annotation-editor --dataset cholec80
 - `Auto Save`(기본 켜짐)는 다른 이미지로 이동할 때 묻지 않고 자동 저장. 끄려면 체크박스를 해제하거나 `--no-auto-save`로 실행
 - `Screenshot[F5]`로 현재 이미지를 화면에 표시 중인 overlay와 함께 `data/dataset/<dataset>/screenshot/`에 저장 (발표 자료용)
 
-편집해 저장하면 `annotation-manual/{split}/`에 원본이 기록되고 같은 내용이 `annotation/{split}/`에도 반영된다. 자동 annotation을 채택하면 `annotation/{split}/`에만 그 파일의 사본이 생긴다. 편집기는 `annotation-monai`, `annotation-qwen` 같은 자동 annotation 디렉터리에는 쓰지 않는다. 좌측 이미지 목록에서 수동 보정된 프레임은 **노란색 배경**으로 강조되고 파일명 앞에 `*` 표시가 붙는다.
+편집해 저장하면 `annotation-manual/{split}/`에 원본이 기록되고 같은 내용이 `annotation/{split}/`에도 반영된다. 자동 annotation을 채택하면 `annotation/{split}/`에만 그 파일의 사본이 생긴다. 편집기는 `annotation-monai`, `annotation-qwen` 같은 자동 annotation 디렉터리에는 쓰지 않는다. 좌측 이미지 목록은 `#`(일련번호), `Image`(파일 이름), `Source` 세 칼럼이다. `Source` 칼럼은 그 프레임의 `annotation` 레이블이 `Manual`·`Monai`·`Qwen` 등 어느 탭과 같은지 보여 주고, 행 배경도 그 출처의 색(`Manual`은 노란색)으로 칠한다. 이 값은 화면에 보이는 행만 백그라운드에서 계산한다.
 
 보정 결과는 데이터셋별 독립 저장소에 커밋한다. 바깥 저장소는 건드릴 필요가 없다.
 
@@ -260,10 +273,12 @@ git add -A && git commit -m "Correct 20 frames in train" && git push
   - Anthropic API로 Claude Opus에 프레임을 보내 bbox/tip을 지정해 `annotation-opus`에 저장 (`source: "opus"`, `tip2` 지원, 실시간/Batch API 모드)
 - `scripts/generate-annotation-qwen25.py`
   - Qwen2.5-VL을 쓰던 이전 버전. 비교·재현용으로 남겨 두었으며 `annotation-qwen2.5`에 저장
+- `scripts/generate-annotation-yolo.py`
+  - 상위 저장소의 yolov8stooltip 검출기(`standalone/yolov8stooltip/data/model/<dataset>/model.pt`)로 bbox/tip을 예측해 `annotation-yolo`에 저장 (`source`는 체크포인트 경로)
 - `scripts/annotation-editor.py`
   - 최종 annotation을 확정하는 GUI 편집기. `annotation`, `annotation-manual`, 자동 annotation(`annotation-*`)을 탭으로 비교하고, 채택하거나 보정한 결과를 `annotation`에 쓴다. 보정 결과는 `annotation-manual`에도 보존한다
 - `scripts/count-dataset.py`
-  - 데이터셋별 `train/val/test` 프레임 수와 비율, split별 manual/자동 레이블 수와 비율을 콘솔에 출력 (`run count-dataset [--dataset <name>]`)
+  - 데이터셋별 `train/val/test` 프레임 수와 비율, split별로 레이블 출처(`default`=`annotation`, `manual`, 그리고 `monai`·`opus`·`qwen` 등 `annotation-*` 폴더마다 한 컬럼)의 레이블 수와 비율을 콘솔에 출력 (`run count-dataset [--dataset <name>]`)
 - `scripts/pipeline.py`
   - 전체 파이프라인 단계를 실행하고 진행 상태를 보여주는 통합 GUI. 상단 `Dataset` 드롭다운으로 `data/dataset-src`/`data/dataset` 아래 발견된 데이터셋을 전환하며 실행/상태를 확인할 수 있다.
 - `tooltip/dataset_paths.py`

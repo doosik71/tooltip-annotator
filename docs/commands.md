@@ -43,6 +43,9 @@ uv run python -m scripts.generate-segmentation --dataset cholec80 --device cuda:
 # 11) cholec80 bbox/tip annotation 자동 생성
 uv run python -m scripts.generate-annotation-monai --dataset cholec80
 
+# (선택) cholec80 yolov8stooltip 검출기 annotation (상위 저장소의 standalone/yolov8stooltip 필요)
+uv run python -m scripts.generate-annotation-yolo --dataset cholec80 --device cuda:0
+
 # 12) cholec80 annotation 수동 보정 (GUI)
 uv run python -m scripts.annotation-editor --dataset cholec80
 
