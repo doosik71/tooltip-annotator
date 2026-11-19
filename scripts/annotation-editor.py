@@ -232,12 +232,11 @@ class AnnotationEditor:
         self.current_image_rgb: np.ndarray | None = None
         self.current_annotations: list[dict[str, dict[str, int]]] = []
         # (label, root, kind) per view tab, kind being "default", "manual" or
-        # "auto". current_tab is the tab shown; preferred_tab is the one the
-        # user picked last, shown again on every frame that has it.
+        # "auto". current_tab is the tab shown; every newly opened frame
+        # starts on Default.
         self.tabs: list[tuple[str, Path, str]] = []
         self.tab_frames: list[ttk.Frame] = []
         self.current_tab = DEFAULT_TAB
-        self.preferred_tab = DEFAULT_TAB
         self.manual_stems: set[str] = set()
         self.manual_indices: set[int] = set()
         self.list_index_width = 1
@@ -719,11 +718,7 @@ class AnnotationEditor:
         self.current_image_path = self.image_paths[index]
         self.current_image_rgb = self._load_rgb_image(self.current_image_path)
         self.image_height, self.image_width = self.current_image_rgb.shape[:2]
-        self.current_tab = (
-            self.preferred_tab
-            if self._tab_available(self.preferred_tab)
-            else DEFAULT_TAB
-        )
+        self.current_tab = DEFAULT_TAB
         self._update_images_label()
         self._render_list_markers()
         self._load_current_tab()
@@ -769,7 +764,6 @@ class AnnotationEditor:
                 )
                 self.source_tags[label] = tag
         self.current_tab = DEFAULT_TAB
-        self.preferred_tab = DEFAULT_TAB
         self.tab_notebook.select(DEFAULT_TAB)
 
     def _tab_annotation_path(self, tab_index: int, image_path: Path) -> Path:
@@ -804,7 +798,6 @@ class AnnotationEditor:
             self.tab_notebook.select(self.current_tab)
             return
         self.current_tab = index
-        self.preferred_tab = index
         self._load_current_tab()
 
     def _load_current_tab(self) -> None:
@@ -1449,7 +1442,6 @@ class AnnotationEditor:
         if self.current_image_path is None:
             return
         self.current_tab = DEFAULT_TAB
-        self.preferred_tab = DEFAULT_TAB
         self._load_current_tab()
         self._update_status("Reloaded annotation from annotation/.")
 
