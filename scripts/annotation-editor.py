@@ -73,6 +73,21 @@ SOURCE_ROW_BACKGROUNDS = (
     "#eee3cf",  # sand
 )
 SOURCE_ROW_FOREGROUND = "#1a1a1a"
+# Deeper shades of the row backgrounds, in the same order, for the marker strip
+# beside the list scrollbar, where the pale row colours would vanish against
+# its grey background.
+SOURCE_MARKER_COLORS = (
+    "#e8a33d",  # Manual: yellow
+    "#4a9fe8",  # sky
+    "#3fae4f",  # green
+    "#c95ac9",  # pink
+    "#f07f3c",  # peach
+    "#7e6ad6",  # lavender
+    "#2eb8a0",  # mint
+    "#d9534f",  # rose
+    "#9cbf2b",  # lime
+    "#b39563",  # sand
+)
 
 # Image list columns, in pixels. The Source column names the tab whose labels
 # annotation/ holds for the frame (see default_source()).
@@ -83,9 +98,15 @@ LIST_SOURCE_COLUMN_WIDTH = 80
 # after the list stops scrolling; finished work is picked up by polling.
 SOURCE_UPDATE_DELAY_MS = 50
 SOURCE_POLL_MS = 30
+# The marker strip samples one frame per pixel row, evenly spaced over the
+# split (every frame when the split is shorter than the strip), and the worker
+# fills the Source of those samples this many at a time. Visible rows requested
+# meanwhile wait for at most one chunk.
+SOURCE_SCAN_CHUNK = 100
 
-# A thin strip beside the list scrollbar marks where manual frames and the
-# current frame sit in the whole list, like the overview ruler in VS Code.
+# A thin strip beside the list scrollbar shows the Source (in
+# SOURCE_MARKER_COLORS) of sampled frames and where the current frame sits in
+# the whole list, like the overview ruler in VS Code.
 LIST_MARKER_WIDTH = 8
 LIST_MARKER_BACKGROUND = "#e6e6e6"
 # The visible-range box is shaded with this colour at this opacity.
@@ -94,7 +115,6 @@ LIST_MARKER_VISIBLE_ALPHA = 0.3
 # A large split shows well under one pixel's worth of rows, so the visible-range
 # box is drawn at least this tall to stay findable.
 LIST_MARKER_VISIBLE_MIN_HEIGHT = 8
-LIST_MARKER_MANUAL_COLOR = "#e8a33d"
 LIST_MARKER_CURRENT_COLOR = "#1565c0"
 
 # The tool number drawn on each bbox, as a multiple of the canvas default font.
@@ -248,6 +268,13 @@ class AnnotationEditor:
         self.source_update_job: str | None = None
         # Row tag per Source label, rebuilt with the tabs.
         self.source_tags: dict[str, str] = {}
+        # Marker strip (priority, colour) per Source label, rebuilt with the
+        # tabs; the earlier tab wins when frames share a pixel row.
+        self.source_marker_colors: dict[str, tuple[int, str]] = {}
+        # Sampled list indices still waiting for the background Source scan,
+        # and whether a scan chunk is in the worker.
+        self.source_scan_queue: list[int] = []
+        self.source_scan_running = False
         self.source_executor = ThreadPoolExecutor(max_workers=1)
         self.image_width = 0
         self.image_height = 0
@@ -474,7 +501,7 @@ class AnnotationEditor:
         self.canvas.bind("<Motion>", self._on_canvas_motion)
         self.canvas.bind("<Leave>", self._on_canvas_leave)
         self.canvas.bind("<Configure>", self._on_canvas_resized)
-        self.list_marker.bind("<Configure>", lambda _event: self._render_list_markers())
+        self.list_marker.bind("<Configure>", self._on_list_marker_resized)
         # identify() still answers for the old layout while <Configure> is
         # being handled, so measure once Tk is idle again.
         self.list_scrollbar.bind(
@@ -689,6 +716,8 @@ class AnnotationEditor:
         self.source_generation += 1
         self.default_sources = {}
         self.source_pending = set()
+        self.source_scan_queue = []
+        self.source_scan_running = False
 
         self.image_list.delete(*self.image_list.get_children())
         for index, image_path in enumerate(self.image_paths):
@@ -712,6 +741,7 @@ class AnnotationEditor:
         self._update_buttons()
         self._render_list_markers()
         self._schedule_source_update()
+        self._scan_marker_samples()
 
     def _open_image_at_index(self, index: int) -> None:
         self.current_index = index
@@ -756,7 +786,10 @@ class AnnotationEditor:
             self.tab_notebook.add(frame, text=text)
             self.tab_frames.append(frame)
         self.source_tags = {}
+        self.source_marker_colors = {}
         for index, (label, _root, _kind) in enumerate(self.tabs[DEFAULT_TAB + 1 :]):
+            if index < len(SOURCE_MARKER_COLORS):
+                self.source_marker_colors[label] = (index, SOURCE_MARKER_COLORS[index])
             if index < len(SOURCE_ROW_BACKGROUNDS):
                 tag = f"source-{index}"
                 self.image_list.tag_configure(
@@ -1018,8 +1051,40 @@ class AnnotationEditor:
             for index in range(start, end)
             if index not in self.default_sources and index not in self.source_pending
         ]
-        if not indices:
+        if indices:
+            self._submit_sources(indices)
+
+    def _scan_marker_samples(self) -> None:
+        """Queue the marker strip's sampled frames for the background Source scan."""
+        self.source_scan_queue = [index for _top, _bottom, index in self._marker_samples()]
+        if not self.source_scan_running:
+            self._scan_source_chunk()
+
+    def _scan_source_chunk(self) -> None:
+        """Hand the next queued frames without a Source value to the worker.
+
+        The following chunk is submitted only once this one is written back,
+        so visible-row requests queue between chunks instead of behind the
+        whole scan.
+        """
+        self.source_scan_running = False
+        if not self.tabs:
             return
+        while self.source_scan_queue:
+            chunk = self.source_scan_queue[:SOURCE_SCAN_CHUNK]
+            del self.source_scan_queue[:SOURCE_SCAN_CHUNK]
+            indices = [
+                index
+                for index in chunk
+                if index not in self.default_sources and index not in self.source_pending
+            ]
+            if indices:
+                self.source_scan_running = True
+                self._submit_sources(indices, on_done=self._scan_source_chunk)
+                return
+
+    def _submit_sources(self, indices: list[int], on_done=None) -> None:
+        """Compute the Source of `indices` in the worker thread."""
         self.source_pending.update(indices)
 
         default_dir = self.tabs[DEFAULT_TAB][1] / self.current_split
@@ -1029,24 +1094,29 @@ class AnnotationEditor:
         def work() -> list[tuple[int, str]]:
             return [(index, default_source(name, default_dir, candidates)) for index, name in jobs]
 
-        self._poll_sources(self.source_executor.submit(work), self.source_generation)
+        self._poll_sources(self.source_executor.submit(work), self.source_generation, on_done)
 
-    def _poll_sources(self, future: Future, generation: int) -> None:
+    def _poll_sources(self, future: Future, generation: int, on_done=None) -> None:
         """Write a finished worker answer into the list (Tk is not thread-safe)."""
         if not future.done():
-            self.root.after(SOURCE_POLL_MS, self._poll_sources, future, generation)
+            self.root.after(SOURCE_POLL_MS, self._poll_sources, future, generation, on_done)
             return
         if generation != self.source_generation or future.cancelled():
             return
         for index, label in future.result():
             self.source_pending.discard(index)
-            self._set_list_source(index, label)
+            self._set_list_source(index, label, render=False)
+        self._render_list_markers()
+        if on_done is not None:
+            on_done()
 
-    def _set_list_source(self, index: int, label: str) -> None:
+    def _set_list_source(self, index: int, label: str, render: bool = True) -> None:
         self.default_sources[index] = label
         tag = self.source_tags.get(label)
         self.image_list.item(str(index), tags=(tag,) if tag else ())
         self.image_list.set(str(index), "source", label)
+        if render:
+            self._render_list_markers()
 
     def _refresh_current_source(self) -> None:
         """Recompute the current frame's Source after annotation/ was written."""
@@ -1078,6 +1148,11 @@ class AnnotationEditor:
         self._render_list_markers()
         self._schedule_source_update()
 
+    def _on_list_marker_resized(self, _event: tk.Event) -> None:
+        """Resample the strip for its new height and redraw it."""
+        self._scan_marker_samples()
+        self._render_list_markers()
+
     def _fit_list_marker_to_trough(self) -> None:
         """Pad the marker strip so it spans only the scrollbar's scroll area.
 
@@ -1107,9 +1182,9 @@ class AnnotationEditor:
     def _render_list_markers(self) -> None:
         """Redraw the strip beside the list scrollbar.
 
-        Each frame maps to a height proportional to its list position, and
-        marks sharing a pixel row collapse into one, so the cost follows the
-        number of manual frames rather than the split size.
+        Each pixel row takes the Source colour of the frame sampled for it
+        (see _marker_samples()), so the cost follows the strip height rather
+        than the split size. Rows whose sample has no known Source stay blank.
         """
         self.list_marker.delete("all")
         total = len(self.image_paths)
@@ -1121,12 +1196,20 @@ class AnnotationEditor:
         def row_of(index: int) -> int:
             return min(int(index * height / total), height - 2)
 
-        # 1. Manual frames.
-        manual_rows = {row_of(index) for index in self.manual_indices}
-        for y in manual_rows:
-            self.list_marker.create_rectangle(
-                0, y, width, y + 2, fill=LIST_MARKER_MANUAL_COLOR, width=0
-            )
+        # 1. Sampled frames by Source colour, runs of one colour merged into
+        # one band.
+        bands: list[tuple[int, int, str]] = []
+        for band_top, band_bottom, index in self._marker_samples():
+            mark = self.source_marker_colors.get(self.default_sources.get(index))
+            if mark is None:
+                continue
+            color = mark[1]
+            if bands and bands[-1][1] == band_top and bands[-1][2] == color:
+                bands[-1] = (bands[-1][0], band_bottom, color)
+            else:
+                bands.append((band_top, band_bottom, color))
+        for band_top, band_bottom, color in bands:
+            self.list_marker.create_rectangle(0, band_top, width, band_bottom, fill=color, width=0)
 
         # 2. The rows currently shown in the list, as a translucent box. It
         # uses the same scale as the marks, so a mark inside the box is a row
@@ -1141,17 +1224,16 @@ class AnnotationEditor:
         top = min(max(top, 0), height - LIST_MARKER_VISIBLE_MIN_HEIGHT)
         bottom = max(min(bottom, height), top + LIST_MARKER_VISIBLE_MIN_HEIGHT)
         # Canvas items have no alpha, so the box is painted with what lies
-        # beneath it (background and manual marks) pre-blended with the shade.
+        # beneath it (background and Source marks) pre-blended with the shade.
         self.list_marker.create_rectangle(
             0, top, width, bottom,
             fill=self._shade_visible_range(LIST_MARKER_BACKGROUND), width=0,
         )
-        shaded_manual_color = self._shade_visible_range(LIST_MARKER_MANUAL_COLOR)
-        for y in manual_rows:
-            if y + 2 > top and y < bottom:
+        for band_top, band_bottom, color in bands:
+            if band_bottom > top and band_top < bottom:
                 self.list_marker.create_rectangle(
-                    0, max(y, top), width, min(y + 2, bottom),
-                    fill=shaded_manual_color, width=0,
+                    0, max(band_top, top), width, min(band_bottom, bottom),
+                    fill=self._shade_visible_range(color), width=0,
                 )
 
         # 3. The current frame, on top of everything.
@@ -1160,6 +1242,20 @@ class AnnotationEditor:
             self.list_marker.create_rectangle(
                 0, y - 1, width, y + 1, fill=LIST_MARKER_CURRENT_COLOR, width=0
             )
+
+    def _marker_samples(self) -> list[tuple[int, int, int]]:
+        """(top, bottom, list index) of the frame shown on each strip band.
+
+        A split longer than the strip gets one evenly spaced frame per pixel
+        row; a shorter one shows every frame on its proportional band.
+        """
+        total = len(self.image_paths)
+        height = max(self.list_marker.winfo_height(), 1)
+        if total == 0:
+            return []
+        if total > height:
+            return [(y, y + 1, y * total // height) for y in range(height)]
+        return [(index * height // total, (index + 1) * height // total, index) for index in range(total)]
 
     def _shade_visible_range(self, color: str) -> str:
         """Return `color` as seen through the translucent visible-range box."""
