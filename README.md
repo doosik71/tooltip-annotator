@@ -61,6 +61,8 @@ uv sync
     │   │   └── ...
     │   ├── annotation-yolo/     # generate-annotation-yolo 결과 (yolov8stooltip 검출기)
     │   │   └── ...
+    │   ├── annotation-detr/     # generate-annotation-detr 결과 (detrtooltip 검출기)
+    │   │   └── ...
     │   └── screenshot/          # (선택) annotation-editor 스크린샷
     └── cholec80/
         └── ... (동일 구조)
@@ -78,6 +80,7 @@ annotation 디렉터리들의 관계는 다음과 같다.
 | `annotation-qwen`        | `generate-annotation-qwen`      | VLM(Qwen3-VL)이 지정한 순수 자동 결과                       | 가능   |
 | `annotation-qwen2.5`     | `generate-annotation-qwen25`    | 이전 VLM(Qwen2.5-VL) 결과. 비교용                          | 가능   |
 | `annotation-yolo`        | `generate-annotation-yolo`      | 상위 저장소의 yolov8stooltip 검출기 결과                    | 가능   |
+| `annotation-detr`        | `generate-annotation-detr`      | 상위 저장소의 detrtooltip 검출기 결과 (`tip2` 포함)         | 가능   |
 
 자동 annotation 스크립트는 각자 자기 `annotation-<이름>` 디렉터리에만 쓰고, `annotation`과 `annotation-manual`은 건드리지 않는다. `annotation-editor`는 반대로 자동 annotation 디렉터리를 읽기만 하고, 사람이 고르거나 고친 결과를 `annotation`(과 `annotation-manual`)에 쓴다. 따라서 자동 annotation을 다시 실행해도 **최종 레이블과 수동 보정분은 바뀌지 않는다**. 새 자동 annotation 도구는 `annotation-<이름>` 디렉터리에 결과를 쓰기만 하면 편집기에 탭으로 나타난다.
 
@@ -214,6 +217,16 @@ uv run python -m scripts.generate-annotation-yolo --dataset cholec80 --device cu
 
 문서: [docs/generate_annotation_yolo.md](./docs/generate_annotation_yolo.md)
 
+DETR(검출기 기반, `tip2` 포함):
+
+```bash
+uv run python -m scripts.generate-annotation-detr --dataset cholec80 --device cuda:1
+```
+
+기본 출력은 `./data/dataset/cholec80/annotation-detr/{train,val,test}`이다. 상위 tooltip-detector 저장소의 `standalone/detrtooltip` 프로젝트와 학습된 체크포인트가 필요하다.
+
+문서: [docs/generate_annotation_detr.md](./docs/generate_annotation_detr.md)
+
 ### 7. GUI 편집기로 annotation 수정
 
 ```bash
@@ -275,6 +288,8 @@ git add -A && git commit -m "Correct 20 frames in train" && git push
   - Qwen2.5-VL을 쓰던 이전 버전. 비교·재현용으로 남겨 두었으며 `annotation-qwen2.5`에 저장
 - `scripts/generate-annotation-yolo.py`
   - 상위 저장소의 yolov8stooltip 검출기(`standalone/yolov8stooltip/data/model/<dataset>/model.pt`)로 bbox/tip을 예측해 `annotation-yolo`에 저장 (`source`는 체크포인트 경로)
+- `scripts/generate-annotation-detr.py`
+  - 상위 저장소의 detrtooltip 검출기(`standalone/detrtooltip/data/model/<dataset>/model.pt`)로 bbox와 tip 1〜2개를 예측해 `annotation-detr`에 저장 (`source`는 체크포인트 경로, `tip2` 지원)
 - `scripts/annotation-editor.py`
   - 최종 annotation을 확정하는 GUI 편집기. `annotation`, `annotation-manual`, 자동 annotation(`annotation-*`)을 탭으로 비교하고, 채택하거나 보정한 결과를 `annotation`에 쓴다. 보정 결과는 `annotation-manual`에도 보존한다
 - `scripts/count-dataset.py`

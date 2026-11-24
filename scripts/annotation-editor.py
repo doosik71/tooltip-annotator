@@ -104,6 +104,11 @@ SOURCE_POLL_MS = 30
 # meanwhile wait for at most one chunk.
 SOURCE_SCAN_CHUNK = 100
 
+# The Every selector lists only every N-th frame of the split (list numbers
+# N, 2N, 3N, ...; numbers start at 1), so a pass over the list spreads over
+# all of it. N runs from 1 (every frame) to this value.
+MAX_LIST_STRIDE = 20
+
 # A thin strip beside the list scrollbar shows the Source (in
 # SOURCE_MARKER_COLORS) of sampled frames and where the current frame sits in
 # the whole list, like the overview ruler in VS Code.
@@ -145,6 +150,9 @@ DELETE_BUTTON_LABEL = "Delete Tool [DEL]"
 SAVE_BUTTON_LABEL = "Save [F2]"
 RELOAD_BUTTON_LABEL = "Reload [F3]"
 SCREENSHOT_BUTTON_LABEL = "Screenshot [F5]"
+AUTO_SAVE_LABEL = "Auto Save [F9]"
+SHOW_ANNOTATION_LABEL = "Show Annotation [F10]"
+KEEP_TAB_LABEL = "Keep Tab [F11]"
 
 # The view tabs above the image. Default shows annotation/, the final labels
 # training and evaluation read; Manual shows annotation-manual/. Every other
@@ -241,6 +249,11 @@ class AnnotationEditor:
         self.split_var = tk.StringVar(value=SPLIT_NAMES[0])
         self.auto_save_var = tk.BooleanVar(value=args.auto_save)
         self.show_annotation_var = tk.BooleanVar(value=True)
+        self.keep_tab_var = tk.BooleanVar(value=False)
+        self.list_stride_var = tk.StringVar(value="1")
+        # Only frames whose list number (index + 1) is divisible by list_stride
+        # are rows of the image list.
+        self.list_stride = 1
         self.status_var = tk.StringVar(value="Ready")
         self.tool_count_var = tk.StringVar(value="0")
         self.images_label_var = tk.StringVar(value="Images (0 / 0)")
@@ -252,11 +265,13 @@ class AnnotationEditor:
         self.current_image_rgb: np.ndarray | None = None
         self.current_annotations: list[dict[str, dict[str, int]]] = []
         # (label, root, kind) per view tab, kind being "default", "manual" or
-        # "auto". current_tab is the tab shown; every newly opened frame
-        # starts on Default.
+        # "auto". current_tab is the tab shown; preferred_tab is the one the
+        # user picked last. A newly opened frame starts on Default, or with
+        # Keep Tab on, on preferred_tab when the frame has it.
         self.tabs: list[tuple[str, Path, str]] = []
         self.tab_frames: list[ttk.Frame] = []
         self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
         self.manual_stems: set[str] = set()
         self.manual_indices: set[int] = set()
         self.list_index_width = 1
@@ -378,7 +393,7 @@ class AnnotationEditor:
 
         self.auto_save_checkbutton = ttk.Checkbutton(
             top_bar,
-            text="Auto Save",
+            text=AUTO_SAVE_LABEL,
             variable=self.auto_save_var,
             command=self._on_auto_save_toggled,
         )
@@ -386,11 +401,28 @@ class AnnotationEditor:
 
         self.show_annotation_checkbutton = ttk.Checkbutton(
             top_bar,
-            text="Show Annotation",
+            text=SHOW_ANNOTATION_LABEL,
             variable=self.show_annotation_var,
             command=self._render_scene,
         )
         self.show_annotation_checkbutton.pack(side=tk.LEFT, padx=(18, 0))
+
+        self.keep_tab_checkbutton = ttk.Checkbutton(
+            top_bar,
+            text=KEEP_TAB_LABEL,
+            variable=self.keep_tab_var,
+        )
+        self.keep_tab_checkbutton.pack(side=tk.LEFT, padx=(18, 0))
+
+        ttk.Label(top_bar, text="Every").pack(side=tk.LEFT, padx=(18, 0))
+        self.list_stride_combobox = ttk.Combobox(
+            top_bar,
+            textvariable=self.list_stride_var,
+            values=[str(n) for n in range(1, MAX_LIST_STRIDE + 1)],
+            state="readonly",
+            width=4,
+        )
+        self.list_stride_combobox.pack(side=tk.LEFT, padx=(8, 0))
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -483,6 +515,7 @@ class AnnotationEditor:
     def _bind_events(self) -> None:
         self.dataset_combobox.bind("<<ComboboxSelected>>", self._on_dataset_changed)
         self.split_combobox.bind("<<ComboboxSelected>>", self._on_split_changed)
+        self.list_stride_combobox.bind("<<ComboboxSelected>>", self._on_list_stride_changed)
         self.image_list.bind("<<TreeviewSelect>>", self._on_image_selected)
 
         # The Treeview class binds Up/Down to move the selection itself, which
@@ -533,6 +566,9 @@ class AnnotationEditor:
         self.root.bind("<F2>", self._on_save_shortcut)
         self.root.bind("<F3>", self._on_reload_shortcut)
         self.root.bind("<F5>", self._on_screenshot_shortcut)
+        self.root.bind("<F9>", lambda _event: self._on_toggle_shortcut(self.auto_save_checkbutton))
+        self.root.bind("<F10>", lambda _event: self._on_toggle_shortcut(self.show_annotation_checkbutton))
+        self.root.bind("<F11>", lambda _event: self._on_toggle_shortcut(self.keep_tab_checkbutton))
         self.root.bind("<Escape>", self._on_escape)
         for number in range(1, MAX_TAB_SHORTCUTS + 1):
             self.root.bind(
@@ -655,6 +691,12 @@ class AnnotationEditor:
         self._save_screenshot()
         return "break"
 
+    def _on_toggle_shortcut(self, checkbutton: ttk.Checkbutton) -> str:
+        # invoke() toggles the box and runs its command, exactly like a click.
+        # "break" also keeps F10 from Tk's default menu-bar binding.
+        checkbutton.invoke()
+        return "break"
+
     def _on_previous_image_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._navigate_images(-1)
         return "break"
@@ -719,20 +761,15 @@ class AnnotationEditor:
         self.source_scan_queue = []
         self.source_scan_running = False
 
-        self.image_list.delete(*self.image_list.get_children())
         for index, image_path in enumerate(self.image_paths):
             if image_path.stem in self.manual_stems:
                 self.manual_indices.add(index)
-            self.image_list.insert(
-                "",
-                tk.END,
-                iid=str(index),
-                values=(self._list_number(index), image_path.name, ""),
-            )
+        self._fill_image_list()
 
-        if self.image_paths:
-            self._select_list_row(0)
-            self._open_image_at_index(0)
+        first_listed = self.list_stride - 1
+        if first_listed < len(self.image_paths):
+            self._select_list_row(first_listed)
+            self._open_image_at_index(first_listed)
         else:
             self._update_images_label()
             self._refresh_tab_states()
@@ -748,7 +785,11 @@ class AnnotationEditor:
         self.current_image_path = self.image_paths[index]
         self.current_image_rgb = self._load_rgb_image(self.current_image_path)
         self.image_height, self.image_width = self.current_image_rgb.shape[:2]
-        self.current_tab = DEFAULT_TAB
+        self.current_tab = (
+            self.preferred_tab
+            if self.keep_tab_var.get() and self._tab_available(self.preferred_tab)
+            else DEFAULT_TAB
+        )
         self._update_images_label()
         self._render_list_markers()
         self._load_current_tab()
@@ -797,6 +838,7 @@ class AnnotationEditor:
                 )
                 self.source_tags[label] = tag
         self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
         self.tab_notebook.select(DEFAULT_TAB)
 
     def _tab_annotation_path(self, tab_index: int, image_path: Path) -> Path:
@@ -831,6 +873,7 @@ class AnnotationEditor:
             self.tab_notebook.select(self.current_tab)
             return
         self.current_tab = index
+        self.preferred_tab = index
         self._load_current_tab()
 
     def _load_current_tab(self) -> None:
@@ -1015,6 +1058,48 @@ class AnnotationEditor:
             return set()
         return {path.stem for path in manual_dir.glob(f"*{ANNOTATION_SUFFIX}")}
 
+    def _fill_image_list(self) -> None:
+        """Rebuild the list rows: list numbers N, 2N, ... (N = list_stride),
+        each row keyed by its list index (number - 1)."""
+        self.image_list.delete(*self.image_list.get_children())
+        for index in range(self.list_stride - 1, len(self.image_paths), self.list_stride):
+            label = self.default_sources.get(index, "")
+            tag = self.source_tags.get(label)
+            self.image_list.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(self._list_number(index), self.image_paths[index].name, label),
+                tags=(tag,) if tag else (),
+            )
+
+    def _on_list_stride_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        """List only every N-th frame; a current frame left out moves to the
+        listed frame just before it (or the first listed one)."""
+        stride = int(self.list_stride_var.get())
+        if stride == self.list_stride:
+            return
+        if stride > len(self.image_paths):
+            # The split is shorter than N: the list would be empty.
+            self.list_stride_var.set(str(self.list_stride))
+            self._update_status(f"The split has fewer than {stride} images.")
+            return
+        target = None
+        if self.current_index is not None and (self.current_index + 1) % stride:
+            if not self._confirm_leave_current_image():
+                self.list_stride_var.set(str(self.list_stride))
+                return
+            target = max(self.current_index - (self.current_index + 1) % stride, stride - 1)
+        self.list_stride = stride
+        self._fill_image_list()
+        if target is not None:
+            self._select_list_row(target)
+            self._open_image_at_index(target)
+        elif self.current_index is not None:
+            self._select_list_row(self.current_index)
+        self._render_list_markers()
+        self._schedule_source_update()
+
     def _list_number(self, index: int) -> str:
         """The # column: running number, zero-padded to the split's digit count."""
         return f"{index + 1:0{self.list_index_width}d}"
@@ -1043,12 +1128,16 @@ class AnnotationEditor:
         total = len(self.image_paths)
         if total == 0 or not self.tabs:
             return
+        # The list holds list numbers N, 2N, ... (N = list_stride), so row r
+        # is list index (r + 1) * N - 1.
+        stride = self.list_stride
+        rows = total // stride
         first, last = (float(value) for value in self.image_list.yview())
-        start = max(int(first * total), 0)
-        end = min(math.ceil(last * total) + 1, total)
+        start = max(int(first * rows), 0)
+        end = min(math.ceil(last * rows) + 1, rows)
         indices = [
             index
-            for index in range(start, end)
+            for index in ((row + 1) * stride - 1 for row in range(start, end))
             if index not in self.default_sources and index not in self.source_pending
         ]
         if indices:
@@ -1112,9 +1201,11 @@ class AnnotationEditor:
 
     def _set_list_source(self, index: int, label: str, render: bool = True) -> None:
         self.default_sources[index] = label
-        tag = self.source_tags.get(label)
-        self.image_list.item(str(index), tags=(tag,) if tag else ())
-        self.image_list.set(str(index), "source", label)
+        # Marker-strip samples need not be rows of a strided list.
+        if self.image_list.exists(str(index)):
+            tag = self.source_tags.get(label)
+            self.image_list.item(str(index), tags=(tag,) if tag else ())
+            self.image_list.set(str(index), "source", label)
         if render:
             self._render_list_markers()
 
@@ -1538,6 +1629,7 @@ class AnnotationEditor:
         if self.current_image_path is None:
             return
         self.current_tab = DEFAULT_TAB
+        self.preferred_tab = DEFAULT_TAB
         self._load_current_tab()
         self._update_status("Reloaded annotation from annotation/.")
 
@@ -1545,7 +1637,7 @@ class AnnotationEditor:
         if self.current_index is None or not self.image_paths:
             return
 
-        new_index = self.current_index + step
+        new_index = self.current_index + step * self.list_stride
         if new_index < 0 or new_index >= len(self.image_paths):
             return
         if not self._confirm_leave_current_image():

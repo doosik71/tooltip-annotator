@@ -46,6 +46,9 @@ uv run python -m scripts.generate-annotation-monai --dataset cholec80
 # (선택) cholec80 yolov8stooltip 검출기 annotation (상위 저장소의 standalone/yolov8stooltip 필요)
 uv run python -m scripts.generate-annotation-yolo --dataset cholec80 --device cuda:0
 
+# (선택) cholec80 detrtooltip 검출기 annotation, tip2 포함 (상위 저장소의 standalone/detrtooltip 필요)
+uv run python -m scripts.generate-annotation-detr --dataset cholec80 --device cuda:1
+
 # 12) cholec80 annotation 수동 보정 (GUI)
 uv run python -m scripts.annotation-editor --dataset cholec80
 
