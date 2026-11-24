@@ -1097,6 +1097,7 @@ class AnnotationEditor:
             self._open_image_at_index(target)
         elif self.current_index is not None:
             self._select_list_row(self.current_index)
+        self._update_images_label()
         self._render_list_markers()
         self._schedule_source_update()
 
@@ -1975,7 +1976,13 @@ class AnnotationEditor:
     def _update_images_label(self) -> None:
         total_count = len(self.image_paths)
         current_position = self.current_index + 1 if self.current_index is not None and total_count else 0
-        self.images_label_var.set(f"Images ({current_position:,} / {total_count:,})")
+        text = f"Images ({current_position:,} / {total_count:,})"
+        stride = self.list_stride
+        if stride > 1:
+            # The listed frames are list numbers N, 2N, ..., so number k*N is
+            # the k-th of them.
+            text += f", Every {stride} ({current_position // stride:,} / {total_count // stride:,})"
+        self.images_label_var.set(text)
 
     def _update_status(self, message: str | None = None) -> None:
         self.tool_count_var.set(str(len(self.current_annotations)))
