@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import shutil
@@ -106,8 +107,13 @@ SOURCE_SCAN_CHUNK = 100
 
 # The Every selector lists only every N-th frame of the split (list numbers
 # N, 2N, 3N, ...; numbers start at 1), so a pass over the list spreads over
-# all of it. N runs from 1 (every frame) to this value.
-MAX_LIST_STRIDE = 20
+# all of it. N is a power of two so that coarse passes nest in finer ones.
+LIST_STRIDES = (1, 2, 4, 8, 16, 32)
+# The Hide selector then drops every H-th frame (list numbers H, 2H, ...), so
+# a finer pass skips the frames a coarser pass already covered: Every 16 with
+# Hide 32 lists 16, 48, 80, ...
+LIST_HIDE_NONE = "None"
+LIST_HIDES = (2, 4, 8, 16, 32)
 
 # A thin strip beside the list scrollbar shows the Source (in
 # SOURCE_MARKER_COLORS) of sampled frames and where the current frame sits in
@@ -251,9 +257,13 @@ class AnnotationEditor:
         self.show_annotation_var = tk.BooleanVar(value=True)
         self.keep_tab_var = tk.BooleanVar(value=False)
         self.list_stride_var = tk.StringVar(value="1")
+        self.list_hide_var = tk.StringVar(value=LIST_HIDE_NONE)
         # Only frames whose list number (index + 1) is divisible by list_stride
-        # are rows of the image list.
+        # and, when list_hide is set, not divisible by list_hide are rows of
+        # the image list. listed_indices holds their list indices in order.
         self.list_stride = 1
+        self.list_hide: int | None = None
+        self.listed_indices: list[int] = []
         self.status_var = tk.StringVar(value="Ready")
         self.tool_count_var = tk.StringVar(value="0")
         self.images_label_var = tk.StringVar(value="Images (0 / 0)")
@@ -418,11 +428,21 @@ class AnnotationEditor:
         self.list_stride_combobox = ttk.Combobox(
             top_bar,
             textvariable=self.list_stride_var,
-            values=[str(n) for n in range(1, MAX_LIST_STRIDE + 1)],
+            values=[str(n) for n in LIST_STRIDES],
             state="readonly",
             width=4,
         )
         self.list_stride_combobox.pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Label(top_bar, text="Hide").pack(side=tk.LEFT, padx=(12, 0))
+        self.list_hide_combobox = ttk.Combobox(
+            top_bar,
+            textvariable=self.list_hide_var,
+            values=[LIST_HIDE_NONE, *(str(n) for n in LIST_HIDES)],
+            state="readonly",
+            width=5,
+        )
+        self.list_hide_combobox.pack(side=tk.LEFT, padx=(8, 0))
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -515,7 +535,8 @@ class AnnotationEditor:
     def _bind_events(self) -> None:
         self.dataset_combobox.bind("<<ComboboxSelected>>", self._on_dataset_changed)
         self.split_combobox.bind("<<ComboboxSelected>>", self._on_split_changed)
-        self.list_stride_combobox.bind("<<ComboboxSelected>>", self._on_list_stride_changed)
+        self.list_stride_combobox.bind("<<ComboboxSelected>>", self._on_list_filter_changed)
+        self.list_hide_combobox.bind("<<ComboboxSelected>>", self._on_list_filter_changed)
         self.image_list.bind("<<TreeviewSelect>>", self._on_image_selected)
 
         # The Treeview class binds Up/Down to move the selection itself, which
@@ -766,8 +787,8 @@ class AnnotationEditor:
                 self.manual_indices.add(index)
         self._fill_image_list()
 
-        first_listed = self.list_stride - 1
-        if first_listed < len(self.image_paths):
+        if self.listed_indices:
+            first_listed = self.listed_indices[0]
             self._select_list_row(first_listed)
             self._open_image_at_index(first_listed)
         else:
@@ -1058,11 +1079,21 @@ class AnnotationEditor:
             return set()
         return {path.stem for path in manual_dir.glob(f"*{ANNOTATION_SUFFIX}")}
 
+    def _filtered_indices(self, stride: int, hide: int | None) -> list[int]:
+        """List indices of the list numbers N, 2N, ... (N = stride) that are
+        not multiples of `hide`."""
+        return [
+            index
+            for index in range(stride - 1, len(self.image_paths), stride)
+            if hide is None or (index + 1) % hide
+        ]
+
     def _fill_image_list(self) -> None:
-        """Rebuild the list rows: list numbers N, 2N, ... (N = list_stride),
-        each row keyed by its list index (number - 1)."""
+        """Rebuild the list rows from the Every/Hide filter, each row keyed by
+        its list index (number - 1)."""
         self.image_list.delete(*self.image_list.get_children())
-        for index in range(self.list_stride - 1, len(self.image_paths), self.list_stride):
+        self.listed_indices = self._filtered_indices(self.list_stride, self.list_hide)
+        for index in self.listed_indices:
             label = self.default_sources.get(index, "")
             tag = self.source_tags.get(label)
             self.image_list.insert(
@@ -1073,24 +1104,36 @@ class AnnotationEditor:
                 tags=(tag,) if tag else (),
             )
 
-    def _on_list_stride_changed(self, _event: tk.Event[tk.Misc]) -> None:
-        """List only every N-th frame; a current frame left out moves to the
+    def _on_list_filter_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        """Apply a new Every/Hide choice; a current frame left out moves to the
         listed frame just before it (or the first listed one)."""
         stride = int(self.list_stride_var.get())
-        if stride == self.list_stride:
+        hide_text = self.list_hide_var.get()
+        hide = None if hide_text == LIST_HIDE_NONE else int(hide_text)
+        if stride == self.list_stride and hide == self.list_hide:
             return
-        if stride > len(self.image_paths):
-            # The split is shorter than N: the list would be empty.
+
+        def revert() -> None:
             self.list_stride_var.set(str(self.list_stride))
-            self._update_status(f"The split has fewer than {stride} images.")
+            self.list_hide_var.set(LIST_HIDE_NONE if self.list_hide is None else str(self.list_hide))
+
+        listed = self._filtered_indices(stride, hide)
+        if self.image_paths and not listed:
+            # E.g. the split is shorter than N, or every N-th frame is also an
+            # H-th one (Every 16 with Hide 16 or Hide 8).
+            revert()
+            self._update_status(f"Every {stride} with Hide {hide_text} lists no images.")
             return
         target = None
-        if self.current_index is not None and (self.current_index + 1) % stride:
-            if not self._confirm_leave_current_image():
-                self.list_stride_var.set(str(self.list_stride))
-                return
-            target = max(self.current_index - (self.current_index + 1) % stride, stride - 1)
+        if self.current_index is not None:
+            row = bisect.bisect_left(listed, self.current_index)
+            if row == len(listed) or listed[row] != self.current_index:
+                if not self._confirm_leave_current_image():
+                    revert()
+                    return
+                target = listed[max(row - 1, 0)]
         self.list_stride = stride
+        self.list_hide = hide
         self._fill_image_list()
         if target is not None:
             self._select_list_row(target)
@@ -1129,16 +1172,14 @@ class AnnotationEditor:
         total = len(self.image_paths)
         if total == 0 or not self.tabs:
             return
-        # The list holds list numbers N, 2N, ... (N = list_stride), so row r
-        # is list index (r + 1) * N - 1.
-        stride = self.list_stride
-        rows = total // stride
+        # Row r of the list is list index listed_indices[r].
+        rows = len(self.listed_indices)
         first, last = (float(value) for value in self.image_list.yview())
         start = max(int(first * rows), 0)
         end = min(math.ceil(last * rows) + 1, rows)
         indices = [
             index
-            for index in ((row + 1) * stride - 1 for row in range(start, end))
+            for index in self.listed_indices[start:end]
             if index not in self.default_sources and index not in self.source_pending
         ]
         if indices:
@@ -1638,9 +1679,11 @@ class AnnotationEditor:
         if self.current_index is None or not self.image_paths:
             return
 
-        new_index = self.current_index + step * self.list_stride
-        if new_index < 0 or new_index >= len(self.image_paths):
+        # The current frame is always a listed one.
+        row = bisect.bisect_left(self.listed_indices, self.current_index) + step
+        if row < 0 or row >= len(self.listed_indices):
             return
+        new_index = self.listed_indices[row]
         if not self._confirm_leave_current_image():
             self._restore_list_selection()
             return
@@ -1977,11 +2020,18 @@ class AnnotationEditor:
         total_count = len(self.image_paths)
         current_position = self.current_index + 1 if self.current_index is not None and total_count else 0
         text = f"Images ({current_position:,} / {total_count:,})"
-        stride = self.list_stride
-        if stride > 1:
-            # The listed frames are list numbers N, 2N, ..., so number k*N is
-            # the k-th of them.
-            text += f", Every {stride} ({current_position // stride:,} / {total_count // stride:,})"
+        if self.list_stride > 1 or self.list_hide is not None:
+            filters = []
+            if self.list_stride > 1:
+                filters.append(f"Every {self.list_stride}")
+            if self.list_hide is not None:
+                filters.append(f"Hide {self.list_hide}")
+            listed_position = (
+                bisect.bisect_left(self.listed_indices, self.current_index) + 1
+                if self.current_index is not None and total_count
+                else 0
+            )
+            text += f", {' '.join(filters)} ({listed_position:,} / {len(self.listed_indices):,})"
         self.images_label_var.set(text)
 
     def _update_status(self, message: str | None = None) -> None:
