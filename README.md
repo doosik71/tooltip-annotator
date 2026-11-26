@@ -72,30 +72,28 @@ uv sync
 
 annotation 디렉터리들의 관계는 다음과 같다.
 
-| 디렉터리                 | 쓰는 주체                       | 내용                                                      | 재생성 |
-| ------------------------ | ------------------------------- | --------------------------------------------------------- | ------ |
-| `annotation`             | `annotation-editor`             | 학습·평가에 쓰는 최종 레이블. 채택한 자동 결과 또는 수동 보정본 | 불가   |
-| `annotation-manual`      | `annotation-editor`             | 사람이 보정한 프레임만                                     | 불가   |
-| `annotation-monai`       | `generate-annotation-monai`     | segmentation mask에서 계산한 순수 자동 결과                 | 가능   |
-| `annotation-qwen`        | `generate-annotation-qwen`      | VLM(Qwen3-VL)이 지정한 순수 자동 결과                       | 가능   |
-| `annotation-qwen2.5`     | `generate-annotation-qwen25`    | 이전 VLM(Qwen2.5-VL) 결과. 비교용                          | 가능   |
-| `annotation-yolo`        | `generate-annotation-yolo`      | 상위 저장소의 yolov8stooltip 검출기 결과                    | 가능   |
-| `annotation-detr`        | `generate-annotation-detr`      | 상위 저장소의 detrtooltip 검출기 결과 (`tip2` 포함)         | 가능   |
+| 디렉터리             | 쓰는 주체                    | 내용                                                            | 재생성 |
+| -------------------- | ---------------------------- | --------------------------------------------------------------- | ------ |
+| `annotation`         | `annotation-editor`          | 학습·평가에 쓰는 최종 레이블. 채택한 자동 결과 또는 수동 보정본 | 불가   |
+| `annotation-manual`  | `annotation-editor`          | 사람이 보정한 프레임만                                          | 불가   |
+| `annotation-monai`   | `generate-annotation-monai`  | segmentation mask에서 계산한 순수 자동 결과                     | 가능   |
+| `annotation-qwen`    | `generate-annotation-qwen`   | VLM(Qwen3-VL)이 지정한 순수 자동 결과                           | 가능   |
+| `annotation-qwen2.5` | `generate-annotation-qwen25` | 이전 VLM(Qwen2.5-VL) 결과. 비교용                               | 가능   |
+| `annotation-yolo`    | `generate-annotation-yolo`   | 상위 저장소의 yolov8stooltip 검출기 결과                        | 가능   |
+| `annotation-detr`    | `generate-annotation-detr`   | 상위 저장소의 detrtooltip 검출기 결과 (`tip2` 포함)             | 가능   |
 
 자동 annotation 스크립트는 각자 자기 `annotation-<이름>` 디렉터리에만 쓰고, `annotation`과 `annotation-manual`은 건드리지 않는다. `annotation-editor`는 반대로 자동 annotation 디렉터리를 읽기만 하고, 사람이 고르거나 고친 결과를 `annotation`(과 `annotation-manual`)에 쓴다. 따라서 자동 annotation을 다시 실행해도 **최종 레이블과 수동 보정분은 바뀌지 않는다**. 새 자동 annotation 도구는 `annotation-<이름>` 디렉터리에 결과를 쓰기만 하면 편집기에 탭으로 나타난다.
 
 `annotation-manual`은 이 파이프라인에서 유일하게 스크립트로 다시 만들 수 없는 산출물이다. 그래서 **데이터셋별로 독립된 git 저장소**로 분리해 관리한다. 이 저장소의 `.gitignore`는 `data/` 전체를 제외하므로 두 저장소는 경로만 겹칠 뿐 서로를 참조하지 않는다(서브모듈이 아니다).
 
-| 데이터셋   | 수작업 레이블 저장소                                        |
-| ---------- | ----------------------------------------------------------- |
-| `cholec80` | https://github.com/doosik71/cholec80-annotation-manual.git   |
+| 데이터셋   | 수작업 레이블 저장소                                       |
+| ---------- | ---------------------------------------------------------- |
+| `cholec80` | https://github.com/doosik71/cholec80-annotation-manual.git |
 
 ```bash
 git clone https://github.com/doosik71/cholec80-annotation-manual.git \
   data/dataset/cholec80/annotation-manual
 ```
-
-관리 방법 상세: [docs/annotation_manual.md](./docs/annotation_manual.md)
 
 학습·평가 코드와 베이스라인들은 기존과 동일하게 `annotation` 하나만 읽으면 된다.
 
@@ -262,7 +260,7 @@ cd data/dataset/cholec80/annotation-manual
 git add -A && git commit -m "Correct 20 frames in train" && git push
 ```
 
-문서: [docs/annotation_editor.md](./docs/annotation_editor.md), [docs/annotation_manual.md](./docs/annotation_manual.md)
+문서: [docs/annotation_editor.md](./docs/annotation_editor.md), 수작업 기준 [docs/annotation_guide.md](./docs/annotation_guide.md)
 
 ![Screen](./screen.png)
 
@@ -312,5 +310,5 @@ git add -A && git commit -m "Correct 20 frames in train" && git push
 - [docs/generate_annotation_qwen.md](./docs/generate_annotation_qwen.md)
 - [docs/generate_annotation_opus.md](./docs/generate_annotation_opus.md)
 - [docs/annotation_editor.md](./docs/annotation_editor.md)
-- [docs/annotation_manual.md](./docs/annotation_manual.md)
+- [docs/annotation_guide.md](./docs/annotation_guide.md)
 - [docs/pipeline.md](./docs/pipeline.md)
