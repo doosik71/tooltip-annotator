@@ -5,6 +5,7 @@ import bisect
 import json
 import math
 import shutil
+import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 import tkinter as tk
@@ -13,10 +14,13 @@ from tkinter import font as tkfont, messagebox, ttk
 from tooltip.annotation import (
     ANNOTATION_SUFFIX,
     SOURCE_MANUAL,
+    TIP_MERGE_RADIUS,
     build_payload,
+    merge_close_tips,
     write_annotation,
 )
 from tooltip.dataset_paths import (
+    DATA_ROOT,
     annotation_dir,
     annotation_manual_dir,
     images_dir,
@@ -46,6 +50,10 @@ SPLIT_NAMES = ("train", "val", "test")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 HANDLE_SIZE = 7.5
 TIP_RADIUS = 6
+# Dashed guide circle around each tip, in image pixels: the 20 px tolerance of
+# the tip F1@20 metric. A second jaw end inside it needs no tip of its own,
+# and saving merges two tips that close into one (see merge_close_tips()).
+TIP_TOLERANCE_RADIUS = TIP_MERGE_RADIUS
 # Annotation keys holding a tip. "tip2" is optional: annotation-qwen records the
 # second end of an opened jaw there.
 TIP_KEYS = ("tip", "tip2")
@@ -95,6 +103,7 @@ SOURCE_MARKER_COLORS = (
 LIST_NUMBER_COLUMN_WIDTH = 80
 LIST_IMAGE_COLUMN_WIDTH = 230
 LIST_SOURCE_COLUMN_WIDTH = 80
+LIST_SCORE_COLUMN_WIDTH = 170
 # Source cells are filled only for rows on screen, in a worker thread, shortly
 # after the list stops scrolling; finished work is picked up by polling.
 SOURCE_UPDATE_DELAY_MS = 50
@@ -114,6 +123,30 @@ LIST_STRIDES = (1, 2, 4, 8, 16, 32)
 # Hide 32 lists 16, 48, 80, ...
 LIST_HIDE_NONE = "None"
 LIST_HIDES = (2, 4, 8, 16, 32)
+
+# The Score column rates how well annotation/ agrees with the detrtooltip
+# detector: the tip F1 @ 20 px of one frame, a one-to-one matching of every
+# predicted tip against every labelled tip, the metric the detector picks its
+# checkpoints by. The cell adds "(tool p/l, tip p/l)", predicted then
+# labelled, when the counts differ, and rows scoring under the Low Score
+# choice are drawn in red. Like Source, only rows on screen are scored, in a
+# worker thread; each request replaces the queue, so the rows on screen now go
+# first. The detector code comes from the parent repository's
+# standalone/detrtooltip, and without it (or the checkpoint) the column stays
+# empty.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DETECTOR_ROOT = REPO_ROOT / "standalone" / "detrtooltip"
+SCORE_MODEL = DATA_ROOT / "annotation-model" / "detrtooltip.pt"
+# Same detection threshold as the detector project (common/inference.py).
+SCORE_CONF = 0.5
+SCORE_TIP_RADIUS = TIP_TOLERANCE_RADIUS
+# Frames the worker runs the detector on per request; frames whose prediction
+# is cached only need their label file read and ride along for free.
+SCORE_CHUNK = 4
+SCORE_THRESHOLDS = ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9")
+DEFAULT_SCORE_THRESHOLD = "0.5"
+LOW_SCORE_TAG = "low-score"
+LOW_SCORE_FOREGROUND = "#d32f2f"
 
 # A thin strip beside the list scrollbar shows the Source (in
 # SOURCE_MARKER_COLORS) of sampled frames and where the current frame sits in
@@ -221,6 +254,73 @@ def default_source(
     return ""
 
 
+def tool_tips(annotations: list) -> list[list[tuple[float, float]]]:
+    """Tips of each tool of an ``annotations`` list, as (x, y) pairs."""
+    return [
+        [(item[key]["x"], item[key]["y"]) for key in TIP_KEYS if isinstance(item.get(key), dict)]
+        for item in annotations
+    ]
+
+
+def matched_tip_count(
+    first: list[tuple[float, float]], second: list[tuple[float, float]], radius: float
+) -> int:
+    """The most one-to-one pairs of tips at most `radius` apart.
+
+    Kuhn's augmenting paths: a frame has a handful of tips, and only the pair
+    count is needed, which equals what the detector project's Hungarian
+    matching (common/tipmetrics.py) counts.
+    """
+    near = [[j for j, q in enumerate(second) if math.dist(p, q) <= radius] for p in first]
+    owner: dict[int, int] = {}
+
+    def assign(i: int, seen: set[int]) -> bool:
+        for j in near[i]:
+            if j in seen:
+                continue
+            seen.add(j)
+            if j not in owner or assign(owner[j], seen):
+                owner[j] = i
+                return True
+        return False
+
+    return sum(assign(i, set()) for i in range(len(first)))
+
+
+def score_frame(
+    predicted: list[list[tuple[float, float]]], labelled: list[list[tuple[float, float]]]
+) -> tuple[float, str]:
+    """(tip F1 @ SCORE_TIP_RADIUS, Score cell text) of one frame.
+
+    A frame where neither side has a tip scores 1. The text appends the tool
+    and tip counts, predicted / labelled, when they differ.
+    """
+    pred_tips = [tip for tips in predicted for tip in tips]
+    label_tips = [tip for tips in labelled for tip in tips]
+    total = len(pred_tips) + len(label_tips)
+    score = 1.0 if total == 0 else 2 * matched_tip_count(pred_tips, label_tips, SCORE_TIP_RADIUS) / total
+    notes = []
+    if len(predicted) != len(labelled):
+        notes.append(f"tool {len(predicted)}/{len(labelled)}")
+    if len(pred_tips) != len(label_tips):
+        notes.append(f"tip {len(pred_tips)}/{len(label_tips)}")
+    text = f"{score:.2f}"
+    if notes:
+        text += f" ({', '.join(notes)})"
+    return score, text
+
+
+def load_score_detector(model_path: Path, device: str):
+    """The detrtooltip Detector, imported from the parent repository."""
+    if not model_path.is_file():
+        raise FileNotFoundError(f"detector checkpoint not found: {model_path}")
+    if str(DETECTOR_ROOT) not in sys.path:
+        sys.path.insert(0, str(DETECTOR_ROOT))
+    from common.inference import Detector
+
+    return Detector(str(model_path), device=device)
+
+
 class AnnotationEditor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -258,6 +358,7 @@ class AnnotationEditor:
         self.keep_tab_var = tk.BooleanVar(value=False)
         self.list_stride_var = tk.StringVar(value="1")
         self.list_hide_var = tk.StringVar(value=LIST_HIDE_NONE)
+        self.score_threshold_var = tk.StringVar(value=DEFAULT_SCORE_THRESHOLD)
         # Only frames whose list number (index + 1) is divisible by list_stride
         # and, when list_hide is set, not divisible by list_hide are rows of
         # the image list. listed_indices holds their list indices in order.
@@ -301,6 +402,20 @@ class AnnotationEditor:
         self.source_scan_queue: list[int] = []
         self.source_scan_running = False
         self.source_executor = ThreadPoolExecutor(max_workers=1)
+        # Score column. Detector tips are cached per image path for the whole
+        # session (they never change); scores per list index together with the
+        # annotation/ mtime they were computed from (None: no label file), so
+        # a frame is rescored only when its label file changes.
+        # score_generation drops answers for a previous list.
+        self.score_predictions: dict[Path, list[list[tuple[float, float]]]] = {}
+        self.scores: dict[int, tuple[int | None, float | None, str]] = {}
+        self.score_queue: list[int] = []
+        self.score_running = False
+        self.score_generation = 0
+        self.score_error: str | None = None
+        # Created and used only in the worker thread.
+        self.score_detector = None
+        self.score_executor = ThreadPoolExecutor(max_workers=1)
         self.image_width = 0
         self.image_height = 0
 
@@ -444,6 +559,16 @@ class AnnotationEditor:
         )
         self.list_hide_combobox.pack(side=tk.LEFT, padx=(8, 0))
 
+        ttk.Label(top_bar, text="Low Score").pack(side=tk.LEFT, padx=(12, 0))
+        self.score_threshold_combobox = ttk.Combobox(
+            top_bar,
+            textvariable=self.score_threshold_var,
+            values=SCORE_THRESHOLDS,
+            state="readonly",
+            width=4,
+        )
+        self.score_threshold_combobox.pack(side=tk.LEFT, padx=(8, 0))
+
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
@@ -457,7 +582,7 @@ class AnnotationEditor:
 
         self.image_list = ttk.Treeview(
             list_frame,
-            columns=("number", "image", "source"),
+            columns=("number", "image", "source", "score"),
             show="headings",
             selectmode="browse",
         )
@@ -466,7 +591,12 @@ class AnnotationEditor:
         self.image_list.heading("source", text="Source", anchor=tk.W)
         self.image_list.column("number", width=LIST_NUMBER_COLUMN_WIDTH, stretch=False)
         self.image_list.column("image", width=LIST_IMAGE_COLUMN_WIDTH, stretch=True)
+        self.image_list.heading("score", text="Score", anchor=tk.W)
         self.image_list.column("source", width=LIST_SOURCE_COLUMN_WIDTH, stretch=False)
+        self.image_list.column("score", width=LIST_SCORE_COLUMN_WIDTH, stretch=False)
+        # Treeview tags created first take precedence, so this one is made
+        # before the Source tags to win over their foreground colour.
+        self.image_list.tag_configure(LOW_SCORE_TAG, foreground=LOW_SCORE_FOREGROUND)
         self.image_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         list_scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.image_list.yview)
@@ -537,6 +667,7 @@ class AnnotationEditor:
         self.split_combobox.bind("<<ComboboxSelected>>", self._on_split_changed)
         self.list_stride_combobox.bind("<<ComboboxSelected>>", self._on_list_filter_changed)
         self.list_hide_combobox.bind("<<ComboboxSelected>>", self._on_list_filter_changed)
+        self.score_threshold_combobox.bind("<<ComboboxSelected>>", self._on_score_threshold_changed)
         self.image_list.bind("<<TreeviewSelect>>", self._on_image_selected)
 
         # The Treeview class binds Up/Down to move the selection itself, which
@@ -622,6 +753,7 @@ class AnnotationEditor:
         if not self._confirm_leave_current_image():
             return
         self.source_executor.shutdown(wait=False, cancel_futures=True)
+        self.score_executor.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
 
     def _on_dataset_changed(self, _event: tk.Event[tk.Misc]) -> None:
@@ -781,6 +913,11 @@ class AnnotationEditor:
         self.source_pending = set()
         self.source_scan_queue = []
         self.source_scan_running = False
+        # score_running is left alone: a chunk still in the worker picks up
+        # the new list's queue when it is written back.
+        self.score_generation += 1
+        self.scores = {}
+        self.score_queue = []
 
         for index, image_path in enumerate(self.image_paths):
             if image_path.stem in self.manual_stems:
@@ -976,6 +1113,13 @@ class AnnotationEditor:
         if self.current_image_path is None:
             return
 
+        # Two tips of one tool within TIP_MERGE_RADIUS are one tip. Merging
+        # them is an edit, so even an unedited frame is then saved as manual.
+        merged = sum(merge_close_tips(annotation) for annotation in self.current_annotations)
+        if merged:
+            self.dirty = True
+            self._render_scene()
+
         label, _root, kind = self.tabs[self.current_tab]
         annotation_path = self._tab_annotation_path(DEFAULT_TAB, self.current_image_path)
         annotation_path.parent.mkdir(parents=True, exist_ok=True)
@@ -988,6 +1132,7 @@ class AnnotationEditor:
                 annotation_path,
             )
             self._refresh_current_source()
+            self._refresh_current_score()
             self._update_status(f"Adopted the {label} annotation into annotation/.")
             return
 
@@ -1009,6 +1154,7 @@ class AnnotationEditor:
 
         self._set_current_manual_flag(True)
         self._refresh_current_source()
+        self._refresh_current_score()
         self.dirty = False
         # An edit made on an automatic tab is a manual annotation now, so show
         # it under Manual rather than under the source it no longer matches.
@@ -1016,7 +1162,11 @@ class AnnotationEditor:
             self.current_tab = MANUAL_TAB
         self._refresh_tab_states()
         self._update_buttons()
-        self._update_status("Saved manual annotation.")
+        self._update_status(
+            f"Saved manual annotation, merging {merged} pair(s) of close tips."
+            if merged
+            else "Saved manual annotation."
+        )
 
     def _save_screenshot(self) -> None:
         """Write the current frame with its visible overlays for slides.
@@ -1094,14 +1244,17 @@ class AnnotationEditor:
         self.image_list.delete(*self.image_list.get_children())
         self.listed_indices = self._filtered_indices(self.list_stride, self.list_hide)
         for index in self.listed_indices:
-            label = self.default_sources.get(index, "")
-            tag = self.source_tags.get(label)
             self.image_list.insert(
                 "",
                 tk.END,
                 iid=str(index),
-                values=(self._list_number(index), self.image_paths[index].name, label),
-                tags=(tag,) if tag else (),
+                values=(
+                    self._list_number(index),
+                    self.image_paths[index].name,
+                    self.default_sources.get(index, ""),
+                    self.scores[index][2] if index in self.scores else "",
+                ),
+                tags=self._row_tags(index),
             )
 
     def _on_list_filter_changed(self, _event: tk.Event[tk.Misc]) -> None:
@@ -1166,20 +1319,25 @@ class AnnotationEditor:
         """(tab label, split directory) of every tab except Default, in tab order."""
         return [(label, root / self.current_split) for label, root, _kind in self.tabs[DEFAULT_TAB + 1 :]]
 
-    def _request_visible_sources(self) -> None:
-        """Hand the visible rows without a Source value to the worker thread."""
-        self.source_update_job = None
-        total = len(self.image_paths)
-        if total == 0 or not self.tabs:
-            return
-        # Row r of the list is list index listed_indices[r].
+    def _visible_indices(self) -> list[int]:
+        """List indices of the rows on screen (row r is listed_indices[r])."""
         rows = len(self.listed_indices)
         first, last = (float(value) for value in self.image_list.yview())
         start = max(int(first * rows), 0)
         end = min(math.ceil(last * rows) + 1, rows)
+        return self.listed_indices[start:end]
+
+    def _request_visible_sources(self) -> None:
+        """Hand the visible rows without a Source value to the worker thread,
+        and the visible rows to the Score worker."""
+        self.source_update_job = None
+        self._request_visible_scores()
+        total = len(self.image_paths)
+        if total == 0 or not self.tabs:
+            return
         indices = [
             index
-            for index in self.listed_indices[start:end]
+            for index in self._visible_indices()
             if index not in self.default_sources and index not in self.source_pending
         ]
         if indices:
@@ -1245,11 +1403,122 @@ class AnnotationEditor:
         self.default_sources[index] = label
         # Marker-strip samples need not be rows of a strided list.
         if self.image_list.exists(str(index)):
-            tag = self.source_tags.get(label)
-            self.image_list.item(str(index), tags=(tag,) if tag else ())
+            self.image_list.item(str(index), tags=self._row_tags(index))
             self.image_list.set(str(index), "source", label)
         if render:
             self._render_list_markers()
+
+    def _row_tags(self, index: int) -> tuple[str, ...]:
+        """Row tags: the Source background, plus red text for a low Score."""
+        tags = []
+        source_tag = self.source_tags.get(self.default_sources.get(index, ""))
+        if source_tag:
+            tags.append(source_tag)
+        score = self.scores.get(index, (None, None, ""))[1]
+        if score is not None and score < float(self.score_threshold_var.get()):
+            tags.append(LOW_SCORE_TAG)
+        return tuple(tags)
+
+    def _on_score_threshold_changed(self, _event: tk.Event[tk.Misc]) -> None:
+        for index in self.scores:
+            if self.image_list.exists(str(index)):
+                self.image_list.item(str(index), tags=self._row_tags(index))
+
+    def _request_visible_scores(self) -> None:
+        """Queue the rows on screen for the Score worker, replacing the queue."""
+        if self.score_error is not None or not self.image_paths:
+            return
+        self.score_queue = self._visible_indices()
+        if not self.score_running:
+            self._score_next_chunk()
+
+    def _refresh_current_score(self) -> None:
+        """Rescore the current frame after annotation/ was written."""
+        if self.score_error is not None or self.current_index is None:
+            return
+        self.score_queue.insert(0, self.current_index)
+        if not self.score_running:
+            self._score_next_chunk()
+
+    def _score_next_chunk(self) -> None:
+        """Hand the next queued rows to the worker: at most SCORE_CHUNK that
+        need the detector, plus any with a cached prediction."""
+        self.score_running = False
+        if self.score_error is not None:
+            return
+        jobs = []
+        inferences = 0
+        while self.score_queue and inferences < SCORE_CHUNK:
+            index = self.score_queue.pop(0)
+            image_path = self.image_paths[index]
+            predicted = self.score_predictions.get(image_path)
+            if predicted is None:
+                inferences += 1
+            label_path = self.annotation_root / self.current_split / f"{image_path.stem}{ANNOTATION_SUFFIX}"
+            # -1 never equals an mtime, so an unscored row is always scored.
+            known_mtime = self.scores[index][0] if index in self.scores else -1
+            jobs.append((index, image_path, label_path, known_mtime, predicted))
+        if not jobs:
+            return
+        self.score_running = True
+        future = self.score_executor.submit(self._score_jobs, jobs)
+        self._poll_scores(future, self.score_generation)
+
+    def _score_jobs(self, jobs: list) -> list:
+        """Worker thread: (index, image path, mtime, predicted tips, label
+        annotations) for every job whose label file changed since it was
+        scored. No Tk calls here."""
+        if self.score_detector is None:
+            self.score_detector = load_score_detector(SCORE_MODEL, self.args.device)
+        results = []
+        for index, image_path, label_path, known_mtime, predicted in jobs:
+            try:
+                mtime = label_path.stat().st_mtime_ns
+            except OSError:
+                mtime = None
+            if predicted is not None and mtime == known_mtime:
+                continue
+            if predicted is None:
+                image_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+                if image_bgr is None:
+                    continue
+                detections = self.score_detector.predict(
+                    cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), SCORE_CONF
+                )
+                predicted = tool_tips(detections)
+            labelled = read_annotations(label_path) if mtime is not None else None
+            results.append((index, image_path, mtime, predicted, labelled))
+        return results
+
+    def _poll_scores(self, future: Future, generation: int) -> None:
+        """Write a finished Score chunk into the list, then start the next."""
+        if not future.done():
+            self.root.after(SOURCE_POLL_MS, self._poll_scores, future, generation)
+            return
+        if future.cancelled():
+            self.score_running = False
+            return
+        error = future.exception()
+        if error is not None:
+            self.score_running = False
+            self.score_error = f"{type(error).__name__}: {error}"
+            self._update_status(f"Score column off: {self.score_error}")
+            return
+        for index, image_path, mtime, predicted, labelled in future.result():
+            self.score_predictions[image_path] = predicted
+            if generation == self.score_generation:
+                self._set_list_score(index, mtime, predicted, labelled)
+        self._score_next_chunk()
+
+    def _set_list_score(self, index: int, mtime: int | None, predicted: list, labelled: list | None) -> None:
+        if labelled is None:
+            self.scores[index] = (mtime, None, "-")
+        else:
+            score, text = score_frame(predicted, tool_tips(labelled))
+            self.scores[index] = (mtime, score, text)
+        if self.image_list.exists(str(index)):
+            self.image_list.set(str(index), "score", self.scores[index][2])
+            self.image_list.item(str(index), tags=self._row_tags(index))
 
     def _refresh_current_source(self) -> None:
         """Recompute the current frame's Source after annotation/ was written."""
@@ -1529,6 +1798,16 @@ class AnnotationEditor:
             if key not in annotation:
                 continue
             tip_x, tip_y = self._image_to_canvas(annotation[key]["x"], annotation[key]["y"])
+            tolerance = TIP_TOLERANCE_RADIUS * self.canvas_scale
+            self.canvas.create_oval(
+                tip_x - tolerance,
+                tip_y - tolerance,
+                tip_x + tolerance,
+                tip_y + tolerance,
+                outline="#ff8080",
+                width=2,
+                dash=(3, 2),
+            )
             self.canvas.create_line(
                 (cx1 + cx2) / 2.0,
                 (cy1 + cy2) / 2.0,
@@ -2161,6 +2440,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Root directory where hand-corrected annotation JSON files are "
             "kept. Defaults to data/dataset/<dataset>/annotation-manual."
+        ),
+    )
+    parser.add_argument(
+        "--device",
+        default="cuda",
+        help=(
+            "Torch device for the detrtooltip detector behind the Score column, "
+            "e.g. 'cuda:1' or 'cpu'. Defaults to cuda."
         ),
     )
     parser.add_argument(

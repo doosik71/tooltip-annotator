@@ -34,6 +34,7 @@
 - `numpy`
 - `tkinter` 사용 가능 환경
 - `data/dataset/<dataset>/images` 디렉터리 존재
+- (`Score` 칼럼용, 선택) 상위 tooltip-detector 저장소의 `standalone/detrtooltip` 코드와 체크포인트 `data/annotation-model/detrtooltip.pt`, `torch`. 없으면 `Score` 칼럼만 비어 있고 나머지 기능은 그대로 동작한다
 
 `tkinter`는 일반적인 데스크톱 Python 환경에 기본 포함되는 경우가 많지만, 일부 최소 설치 환경에서는 별도 패키지가 필요할 수 있다.
 
@@ -70,6 +71,8 @@ python -m scripts.annotation-editor \
   - 최종 annotation JSON 루트. 기본값은 `data/dataset/<dataset>/annotation`. 명시하면 `--dataset` 기본값보다 항상 우선한다. 이 디렉터리와 같은 위치의 `annotation-*` 디렉터리가 자동 annotation 탭이 된다.
 - `--manual`
   - 수동 보정본 저장 루트. 기본값은 `data/dataset/<dataset>/annotation-manual`. 명시하면 `--dataset` 기본값보다 항상 우선한다.
+- `--device`
+  - `Score` 칼럼의 detrtooltip 추론에 쓸 torch 디바이스. 기본값은 `cuda`이고, `cuda:1`이나 `cpu`처럼 바꿀 수 있다.
 - `--auto-save` / `--no-auto-save`
   - `Auto Save`의 시작 상태를 정한다. 기본값은 켜짐(`--auto-save`)이고, `--no-auto-save`를 주면 매번 저장 여부를 묻는 동작으로 시작한다. 어느 쪽이든 실행 중에 툴바 체크박스로 바꿀 수 있다.
 
@@ -126,6 +129,8 @@ python -m scripts.annotation-editor
   - 간격을 절반씩 줄여 가며 보정할 때 이미 보정한 파일을 숨기는 용도다. 예를 들어 `Every 32`로 보정을 마친 뒤 `Every 16`, `Hide 32`로 바꾸면 목록 번호 16, 48, 80, …만 보인다. 이어서 `Every 8`, `Hide 16`이면 8, 24, 40, …이 보인다.
   - `Every 16`, `Hide 16`처럼 남는 파일이 하나도 없는 조합은 선택되지 않고 이전 값으로 돌아간다.
   - 현재 파일이 빠질 때의 이동, split 변경·재실행 시의 동작은 `Every`와 같다(재실행하면 None).
+- `Low Score`
+  - `Score`가 이 값보다 낮은 행을 빨간 글자(`#d32f2f`)로 표시한다(0.1〜0.9, **기본값 0.5**). 바꾸면 이미 계산된 행의 색이 바로 바뀐다.
 
 #### 버튼 색상
 
@@ -164,7 +169,7 @@ python -m scripts.annotation-editor
 
 #### 좌측 패널
 
-선택된 split 안의 이미지 목록을 `#`, `Image`, `Source` 세 칼럼(`ttk.Treeview`)으로 표시한다. 목록에서 이미지를 클릭하면 우측 메인 화면에 해당 이미지가 로드된다.
+선택된 split 안의 이미지 목록을 `#`, `Image`, `Source`, `Score` 네 칼럼(`ttk.Treeview`)으로 표시한다. 목록에서 이미지를 클릭하면 우측 메인 화면에 해당 이미지가 로드된다.
 
 `#` 칼럼은 일련번호, `Image` 칼럼은 파일 이름이다. 일련번호는 1부터 시작하고, 자리수는 그 split의 전체 프레임 수에 맞춰 자동으로 정해진다.
 
@@ -187,6 +192,18 @@ split이나 데이터셋을 바꾸면 자리수도 다시 계산된다.
 - 행 배경색은 `Default` 다음 탭부터 탭 순서대로 `SOURCE_ROW_BACKGROUNDS`의 10가지 색을 하나씩 쓴다. 첫 색은 `Manual`의 노란색(`#ffe9a8`)이고, cholec80에서는 `Monai` 하늘색, `Opus` 연두색, `Qwen` 분홍색, `Qwen2.5` 살구색, `Yolo` 연보라색이 된다. 탭이 10개를 넘으면 나머지 탭과, 일치하는 탭이 없는 행은 기본 색으로 둔다.
 - 행 색은 `Source` 값만 따른다. 그래서 수동 보정본이 있어도 `annotation`이 다른 탭의 결과를 채택한 프레임은 그 탭의 색으로 보인다. 수동 보정본이 있는지는 목록에 따로 표시하지 않고, 표시 막대의 호박색 눈금으로만 알 수 있다.
 - 선택된 행은 `Treeview`에서 tag 색보다 테마의 선택 색이 우선하므로, 선택된 상태에서는 출처 색 대신 일반 선택 색으로 보인다.
+
+`Score` 칼럼은 그 프레임의 `annotation` 레이블이 detrtooltip 검출기의 예측과 얼마나 맞는지를 0〜1로 보여 준다. 낮은 행이 재검토 후보다.
+
+- 점수는 tip F1@20이다. 예측 tip(`tip`, `tip2` 모두)과 레이블 tip을 20 px(`SCORE_TIP_RADIUS`, tip 점선 원의 반지름과 같다) 안에서 1:1로 짝지었을 때, 2 × 짝 수 / (예측 tip 수 + 레이블 tip 수)다. 검출기가 체크포인트를 고르는 지표와 같다. 양쪽 모두 tip이 없으면 1이다.
+- 도구 수나 tip 수가 다르면 괄호 안에 `예측/레이블` 순서로 적는다. 예: `0.67 (tip 1/2)`은 검출기가 tip 1개, 레이블이 2개다. `0.50 (tool 2/1, tip 2/1)`처럼 둘 다 다를 수도 있다.
+- `annotation`에 파일이 없으면 `-`다.
+- 검출 신뢰도 임계값은 검출기 프로젝트와 같은 0.5(`SCORE_CONF`)다. 모델은 `data/annotation-model/detrtooltip.pt`(`SCORE_MODEL`)이고, 디바이스는 `--device`로 정한다.
+- `Source`처럼 화면에 보이는 행만 작업 스레드에서 계산한다. 스크롤이 멈출 때마다 대기열을 지금 보이는 행으로 바꾸고, 한 번에 추론이 필요한 프레임 4장(`SCORE_CHUNK`)씩 처리한다. 그래서 빠르게 스크롤해도 지나간 행 때문에 기다리지 않는다. 첫 계산 때 모델을 읽느라 몇 초 걸린다.
+- 검출기 예측은 프레임마다 한 번만 계산해 편집기를 닫을 때까지 메모리에 둔다. 점수는 계산할 때의 `annotation` 파일 수정 시각과 함께 저장한다. 다시 보이는 행은 수정 시각만 확인하고, 파일이 바뀐 경우에만 추론 없이 점수를 다시 계산한다. 편집기에서 저장하면 현재 프레임을 바로 다시 계산한다.
+- 모델 파일이나 detrtooltip 코드가 없거나 디바이스를 쓸 수 없으면, 상태 표시줄에 `Score column off: ...`를 띄우고 그 실행 동안 `Score` 계산을 멈춘다.
+- detrtooltip은 이 데이터셋의 수동 레이블로 학습한 모델이다. 학습에 쓴 프레임은 점수가 높게 나오는 편이므로, 그런 프레임에서 점수가 낮으면 더 강한 재검토 신호다.
+- 글자색은 행 단위로만 바꿀 수 있어서(`Treeview`는 칸마다 색을 지정할 수 없다) 빨간 글자는 행 전체에 적용된다. 배경색은 `Source` 색을 그대로 쓴다. `Treeview`는 먼저 만든 tag가 우선하므로, 빨간 글자 tag(`LOW_SCORE_TAG`)를 `Source` tag보다 먼저 만든다.
 
 스크롤바 왼쪽의 얇은 표시 막대는 VS Code의 overview ruler처럼 목록 전체에서 프레임 위치를 보여 준다. 막대 높이가 목록 전체에 대응하며, 수동 보정 프레임은 호박색(`#e8a33d`) 눈금, 현재 프레임은 파란색(`#1565c0`) 눈금으로 표시된다. 지금 목록에 보이는 행의 범위는 반투명한 어두운 상자로 겹쳐 그린다. 그리는 순서는 수동 보정 눈금, 보이는 범위 상자, 현재 프레임 눈금이다. 그래서 상자 안의 보정 눈금은 어둡게 비쳐 보이고, 현재 프레임 눈금은 항상 맨 위에 보인다. 표시 전용이라 클릭해도 반응하지 않는다.
 
@@ -292,6 +309,8 @@ TurboVNC 같은 원격 화면에서는 화살표 커서의 끝이 실제 클릭 
 벌어진 가위나 bipolar forceps처럼 끝이 둘인 도구는 두 번째 tip(`tip2`)을 가질 수 있다. `annotation-qwen` 결과에 들어 있을 수 있고, 편집기에서 직접 추가하거나 지울 수도 있다.
 
 - 두 번째 tip은 첫 번째 tip과 같은 빨간 원형 핸들로 그려지며, 드래그로 옮길 수 있다.
+- 모든 tip 둘레에는 반지름 20 px(원본 이미지 기준, `TIP_TOLERANCE_RADIUS`)의 점선 원이 tip 연결선과 같은 색(`#ff8080`)으로 그려진다. 평가 지표 tip F1@20의 허용 거리와 같으므로, 도구의 다른 끝이 이 원 안에 있으면 두 번째 tip을 따로 찍지 않아도 된다. 화면에만 그리고 스크린샷에는 넣지 않는다.
+- 한 도구의 두 tip이 20 px(`TIP_MERGE_RADIUS`, `tooltip/annotation.py`) 이내이면, 저장할 때 두 점의 평균(반올림, .5는 올림)을 `tip` 하나로 합치고 `tip2`를 지운다. 아래 저장 동작을 참고한다.
 - bbox를 이동하면 두 tip이 함께 이동하고, bbox를 줄이면 두 tip이 모두 박스 안으로 따라 들어온다.
 - 추가와 삭제는 오른쪽 클릭 메뉴로 한다(아래 참고).
 
@@ -320,6 +339,12 @@ TurboVNC 같은 원격 화면에서는 화살표 커서의 끝이 실제 클릭 
 | 모든 탭                | 편집함      | `annotation-manual`과 `annotation`에 `source: "manual"`로 저장           |
 | `Monai`, `Qwen` 등     | 편집 안 함  | 그 탭의 JSON 파일을 `annotation`에 **그대로 복사**(채택). `source`는 원래 값 유지 |
 | `Default`, `Manual`    | 편집 안 함  | 저장할 것이 없으므로 `Save`가 비활성                                       |
+
+저장할 때는 먼저 20 px 이내의 두 tip을 평균 tip 하나로 합친다(`merge_close_tips()`). 합친 도구가 있으면 그 자체가 편집이므로, 위 표의 "편집함"과 같이 `source: "manual"`로 저장한다.
+
+- 자동 결과를 채택할 때 합칠 tip이 있으면, 그대로 복사하지 않고 합친 내용을 수동 보정본으로 저장한다. 자동 annotation 파일은 그대로 둔다.
+- `Default`나 `Manual` 탭에서 편집하지 않은 프레임은 `Save` 버튼이 비활성이지만, `F2`를 누르면 합칠 tip이 있을 때 합쳐서 저장한다.
+- 합친 경우 상태 표시줄에 `Saved manual annotation, merging N pair(s) of close tips.`가 뜬다.
 
 - 자동 annotation 탭에서는 편집하지 않아도 `Save`가 활성화되어 있다. 누르면 그 결과를 최종 레이블로 채택한다.
 - 채택할 때 그 프레임의 `annotation-manual` 파일은 지우지 않는다. 수동 보정본은 `Manual` 탭에서 계속 볼 수 있다.
@@ -475,7 +500,7 @@ GUI 환경이 없는 터미널 세션일 수 있다. 로컬 데스크톱 세션�
 annotation overlay는 Canvas 도형으로 따로 그린다.
 
 - bbox: 사각형
-- tip, 두 번째 tip: 빨간 원형 핸들. bbox 중심에서 각 tip까지 점선을 긋는다
+- tip, 두 번째 tip: 빨간 원형 핸들. bbox 중심에서 각 tip까지 점선을 긋고, tip 둘레에 반지름 `TIP_TOLERANCE_RADIUS`(20 px)의 점선 원을 같은 색으로 그린다
 - 선택된 bbox: 강조 색상과 코너 핸들 표시
 - 도구 번호: bbox 좌상단 안쪽에 1부터 표시
 

@@ -16,9 +16,11 @@ checkpoint path relative to the repository root, e.g.
 Each detection becomes one annotation by the same rule as
 generate-annotation-yolo: tips are rounded and clipped to the frame, and the
 box is grown to hold every tip pixel. ``tip2`` is written when the model's
-P(second tip) is over 0.5. The model's two tip slots carry no order, so the
-tips are ordered as the other labellers of this project order them: ``tip``
-is the one nearer the frame centre.
+P(second tip) is over 0.5 and the two tips are more than 20 px apart (the
+detector's postprocess() gives closer ones as one tip at their mean). The
+model's two tip slots carry no order, so the tips are ordered as the other
+labellers of this project order them: ``tip`` is the one nearer the frame
+centre.
 """
 from __future__ import annotations
 

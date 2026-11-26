@@ -36,7 +36,7 @@ uv run python -m scripts.generate-annotation-detr --dataset cholec80 --device cu
 
 ## 처리 방식
 
-1. 이미지를 모델 입력 크기(736 × 480)로 맞춰 추론하고, box와 tip을 원본 좌표로 되돌린다. `tip2`는 모델의 P(두 번째 tip 존재)가 0.5를 넘을 때만 낸다.
+1. 이미지를 모델 입력 크기(736 × 480)로 맞춰 추론하고, box와 tip을 원본 좌표로 되돌린다. `tip2`는 모델의 P(두 번째 tip 존재)가 0.5를 넘을 때만 낸다. 두 tip이 20 px 이내이면 detrtooltip의 `postprocess()`가 두 점의 평균을 `tip` 하나로 내고 `tip2`는 내지 않는다(레이블 규칙과 같다).
 2. 검출마다 annotation 하나를 만든다. tip은 반올림해 프레임 안으로 자르고, box는 모든 tip 픽셀을 포함하도록 넓힌다. `generate-annotation-yolo`와 같은 규칙이다.
 3. 모델의 두 tip 슬롯에는 순서가 없다. 그래서 다른 자동 annotation(opus, qwen)과 같이 프레임 중심에 가까운 쪽을 `tip`, 다른 쪽을 `tip2`로 쓴다.
 4. annotation을 box 좌상단 좌표 순으로 정렬해 저장한다. 검출이 없으면 `"annotations": []`로 저장한다.

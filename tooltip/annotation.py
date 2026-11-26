@@ -25,6 +25,7 @@ the mask pipeline. `annotation_source()` returns the value as it is, with
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +51,11 @@ ANNOTATION_SUFFIX = ".json"
 SOURCE_MASK = "tooltip-annotator/scripts/generate-annotation-monai.py"
 SOURCE_LEGACY_AUTO = "auto"
 SOURCE_MANUAL = "manual"
+
+# Two tips of one tool at most this many pixels apart are one tip: the 20 px
+# tolerance of the tip F1 @ 20 px metric. merge_close_tips() replaces them
+# with their mean.
+TIP_MERGE_RADIUS = 20
 
 # Contours this small are almost always noise rather than a tool: drop a box
 # when both sides are under SMALL_BOX_MIN_SIZE or either side is under
@@ -140,6 +146,24 @@ def extract_annotations(mask: np.ndarray) -> list[dict[str, object]]:
 
     contour_entries.sort(key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3]))
     return [entry[1] for entry in contour_entries]
+
+
+def merge_close_tips(annotation: dict) -> bool:
+    """Fold ``tip2`` into ``tip`` when they are within TIP_MERGE_RADIUS.
+
+    The merged tip is the mean of the two, rounded to whole pixels (halves
+    up). Returns whether the annotation changed.
+    """
+    tip, tip2 = annotation.get("tip"), annotation.get("tip2")
+    if not isinstance(tip, dict) or not isinstance(tip2, dict):
+        return False
+    if math.dist((tip["x"], tip["y"]), (tip2["x"], tip2["y"])) > TIP_MERGE_RADIUS:
+        return False
+    annotation["tip"] = {
+        key: int(math.floor((tip[key] + tip2[key]) / 2 + 0.5)) for key in ("x", "y")
+    }
+    del annotation["tip2"]
+    return True
 
 
 def build_payload(
