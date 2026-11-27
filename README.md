@@ -242,7 +242,7 @@ python -m scripts.annotation-editor --dataset cholec80
 - bbox 이동 (겹친 경우 가장 작은 박스가 선택된다)
 - bbox 리사이즈
 - tip 드래그 수정
-- 마우스 오른쪽 버튼 메뉴로 도구 삭제(`Delete Tool`), 두 번째 tip 추가·삭제(`Add Second Tip`/`Remove Second Tip`), 선택된 도구가 없을 때는 도구 추가(`Add Tool`)
+- 마우스 오른쪽 버튼 메뉴로 도구 삭제(`Delete Tool`), 두 번째 tip 추가·삭제(`Add Second Tip`/`Remove Second Tip`), 도구 종류 지정·삭제(`Label` 하위 메뉴 또는 `g`·`b`·`h`·`s`·`c`·`i`·`o`·`p`, 지우기 `x`, 박스 우상단에 표시), 선택된 도구가 없을 때는 도구 추가(`Add Tool`)
 - `Add Tool[INS/Wheel]`로 annotation 추가 (이미지 위에서 마우스 휠 버튼 클릭으로도 가능하며, 추가 중에 휠 버튼이나 `Adding...` 버튼을 다시 누르면 `Esc`처럼 취소)
 - 방향키 또는 이미지 위에서 마우스 휠 스크롤로 이전/다음 영상 이동 (휠 위: 이전, 휠 아래: 다음)
 - `Delete Tool[DEL]`로 annotation 삭제

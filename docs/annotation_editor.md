@@ -163,9 +163,20 @@ python -m scripts.annotation-editor
 | `Esc`              | 추가 모드 취소                  |
 | 방향키             | 이전/다음 이미지                |
 | `1`~`9`            | 해당 번호의 탭 선택             |
+| `g`                | 선택된 도구의 label을 `grasper`로 |
+| `b`                | 〃 `bipolar`                    |
+| `h`                | 〃 `hook`                       |
+| `s`                | 〃 `scissors`                   |
+| `c`                | 〃 `clipper`                    |
+| `i`                | 〃 `irrigator`                  |
+| `o`                | 〃 `other`                      |
+| `p`                | 〃 `specimen bag`               |
+| `x`                | 선택된 도구의 label 지우기      |
 | 마우스 오른쪽 버튼 | 도구 팝업 메뉴                  |
 
-낱자 키(`a`, `d`, `s`, `r`, `v`)는 바인딩하지 않는다. 입력 포커스가 어디에 있든 최상위 창이 받기 때문에, 무심코 누른 `d` 하나로 annotation이 삭제되는 사고를 막기 위해서다.
+label 키는 대문자로 눌러도(Caps Lock) 같다. 선택된 도구가 없으면 아무 일도 하지 않는다. 오른쪽 클릭 메뉴의 `Label` 하위 메뉴에도 항목마다 `(g) grasper`, `(x) Clear Label`처럼 이 키가 앞에 표시된다.
+
+낱자 키는 label 지정에만 쓴다. label 키는 입력 포커스가 어디에 있든 최상위 창이 받지만, label만 바꾸고 다시 누르거나 `Reload`로 되돌릴 수 있다. 삭제나 저장처럼 되돌리기 어려운 동작에는 낱자 키를 바인딩하지 않는다. 무심코 누른 키 하나로 annotation이 삭제되는 사고를 막기 위해서다.
 
 #### 좌측 패널
 
@@ -240,6 +251,7 @@ tools 2 | mode=select
 - 원본 이미지
 - annotation bbox
 - annotation tip (두 번째 tip이 있으면 함께)
+- 도구 번호(bbox 좌상단 안쪽)와 도구 종류(`label`, 있을 때만 bbox 우상단 안쪽에 오른쪽 정렬)
 
 #### annotation 탭
 
@@ -323,8 +335,9 @@ TurboVNC 같은 원격 화면에서는 화살표 커서의 끝이 실제 클릭 
 | 순서 | 메뉴 항목                                  | 나오는 조건과 동작                                            |
 | ---- | ------------------------------------------ | ------------------------------------------------------------ |
 | 1    | `Add Second Tip` 또는 `Remove Second Tip`  | 선택된 도구가 있을 때만 나온다. 두 번째 tip이 없으면 `Add Second Tip`: 오른쪽 클릭한 위치에 두 번째 tip을 만든다(위치가 박스 밖이면 박스 안의 가장 가까운 픽셀로 옮긴다). 있으면 `Remove Second Tip`: 두 번째 tip을 지운다 |
-| 2    | `Add Tool` 또는 `Delete Tool`              | 선택된 도구가 없으면 `Add Tool`: 추가 모드로 들어간다(`Add Tool` 버튼과 같다). 있으면 `Delete Tool`: 선택된 도구를 삭제한다 |
-| 3    | `Cancel`                                   | 항상 나온다. 아무것도 하지 않고 메뉴를 닫는다                  |
+| 2    | `Label` ▸                                  | 선택된 도구가 있을 때만 나온다. 하위 메뉴에서 도구 종류(`grasper`, `bipolar`, `hook`, `scissors`, `clipper`, `irrigator`, `specimen bag`, `other`)를 고르면 그 도구의 `label`이 된다. 현재 값에는 표시가 붙는다. 맨 아래 `(x) Clear Label`은 `label`을 지운다. 항목 이름 앞의 괄호는 단축키다(단축키 정리 참고)(`label`이 없으면 비활성) |
+| 3    | `Add Tool` 또는 `Delete Tool`              | 선택된 도구가 없으면 `Add Tool`: 추가 모드로 들어간다(`Add Tool` 버튼과 같다). 있으면 `Delete Tool`: 선택된 도구를 삭제한다 |
+| 4    | `Cancel`                                   | 항상 나온다. 아무것도 하지 않고 메뉴를 닫는다                  |
 
 `Delete Tool`은 툴바의 삭제 버튼과 같은 빨간 글자로 표시된다. 메뉴는 `Cancel`, `Esc`, 또는 메뉴 바깥 아무 곳이나 클릭해도 닫힌다. 바깥 클릭은 메뉴를 닫는 데만 쓰이고 그 위치의 도구 선택 등에는 전달되지 않는다.
 
@@ -413,7 +426,7 @@ JSON 구조는 다음과 같다.
 }
 ```
 
-`source`는 이 편집기가 편집 후 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `tip2`(두 번째 tip)와 `label`(도구 이름)은 있을 때만 기록된다. `label`은 편집기에서 바꿀 수 없고, 읽어 온 값을 그대로 보존한다.
+`source`는 이 편집기가 편집 후 저장한 파일에서 항상 `manual`이고, `edited_at`은 저장 시각(ISO 8601, 로컬 타임존)이다. `tip2`(두 번째 tip)와 `label`(도구 이름)은 있을 때만 기록된다. `label`은 오른쪽 클릭 메뉴의 `Label`로 고르거나 지울 수 있다. 목록에 없는 값(예: qwen의 `bipolar forceps`)도 읽어 온 그대로 표시하고 보존한다.
 
 자동 annotation을 편집 없이 채택한 프레임은 `annotation`에만 그 결과 파일의 사본이 생긴다. `source`는 원래 값(예: `qwen`, `tooltip-annotator/scripts/generate-annotation-monai.py`)이고 `edited_at`은 붙지 않는다.
 
@@ -503,6 +516,7 @@ annotation overlay는 Canvas 도형으로 따로 그린다.
 - tip, 두 번째 tip: 빨간 원형 핸들. bbox 중심에서 각 tip까지 점선을 긋고, tip 둘레에 반지름 `TIP_TOLERANCE_RADIUS`(20 px)의 점선 원을 같은 색으로 그린다
 - 선택된 bbox: 강조 색상과 코너 핸들 표시
 - 도구 번호: bbox 좌상단 안쪽에 1부터 표시
+- 도구 종류: `label`이 있으면 bbox 우상단 안쪽에 오른쪽 정렬로 표시. 글꼴과 색은 도구 번호와 같다
 
 도구 번호는 Canvas 텍스트 항목의 기본 글꼴(`TkDefaultFont`)을 그대로 쓰면 수술 영상 위에서 너무 작아 잘 보이지 않는다. 그래서 기본 글꼴을 복제해 크기만 `ANNOTATION_LABEL_FONT_SCALE`(기본 2)배로 키운 글꼴을 쓴다.
 
@@ -577,7 +591,7 @@ tip 핸들 hit 시 `tip` 모드가 활성화된다. 드래그 중 잡은 tip의 
 
 `<ButtonPress-3>`에 바인딩된 `_on_canvas_context_menu()`가 처리한다. 클릭 지점을 `_hit_test()`로 확인해 도구가 있으면 선택한 뒤, 선택 여부에 따라 `tk.Menu`를 새로 만들어 `tk_popup()`으로 띄운다. 메뉴를 매번 새로 만드는 것은 항목 구성과 활성 상태가 선택된 도구에 따라 달라지기 때문이다.
 
-`Add Second Tip`은 메뉴를 띄운 지점의 이미지 좌표를 받아 `_add_second_tip()`에서 박스 안으로 clamp해 `tip2`를 만든다. `Remove Second Tip`은 `_remove_second_tip()`에서 `tip2`를 지운다. 두 동작 모두 `_mark_dirty()`를 호출하므로 일반 편집과 같은 저장 규칙을 따른다.
+`Add Second Tip`은 메뉴를 띄운 지점의 이미지 좌표를 받아 `_add_second_tip()`에서 박스 안으로 clamp해 `tip2`를 만든다. `Remove Second Tip`은 `_remove_second_tip()`에서 `tip2`를 지운다. `Label` 하위 메뉴의 항목은 `_set_selected_label()`로 `label`을 바꾸거나(`Clear Label`이면 지우거나) 한다. 도구 종류 목록은 `TOOL_LABELS` 상수이며, Claude Opus 자동 annotation(`scripts/generate-annotation-opus.py`)의 `LABELS`와 같다. 이 동작들은 모두 값이 바뀔 때 `_mark_dirty()`를 호출하므로 일반 편집과 같은 저장 규칙을 따른다.
 
 ### 저장 정책
 
@@ -606,7 +620,7 @@ tip 핸들 hit 시 `tip` 모드가 활성화된다. 드래그 중 잡은 tip의 
 - 다각형 contour 편집은 지원하지 않는다.
 - 겹친 박스 중 큰 쪽을 선택하려면 작은 박스에 덮이지 않은 영역을 클릭해야 한다. 같은 지점을 반복 클릭해 겹친 박스를 순환 선택하는 기능은 없다.
 - tip만 자동으로 다시 계산하는 기능은 없다.
-- 도구 이름(`label`)은 보존만 하고 화면에 표시하거나 편집하지 않는다.
+- 도구 종류(`label`)는 스크린샷에는 그리지 않는다. 좁은 박스에서는 긴 이름이 도구 번호와 겹칠 수 있다.
 - 탭 목록은 시작할 때와 데이터셋을 바꿀 때만 만든다. 실행 중에 새로 생긴 `annotation-*` 디렉터리는 반영되지 않는다.
 - 숫자 키 단축키는 `1`~`9`까지다. 탭이 9개를 넘으면 10번째부터는 클릭으로만 고를 수 있다.
 - `Default` 탭은 `annotation` 하나만 보여 준다. 그 프레임의 최종 레이블이 어느 탭과 같은지는 좌측 목록의 `Source` 칼럼으로 알 수 있다. 다만 어느 탭과도 같지 않은 레이블의 출처는 파일의 `source` 값으로만 알 수 있다.

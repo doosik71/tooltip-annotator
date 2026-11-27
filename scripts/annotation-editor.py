@@ -164,6 +164,17 @@ LIST_MARKER_CURRENT_COLOR = "#1565c0"
 # The tool number drawn on each bbox, as a multiple of the canvas default font.
 ANNOTATION_LABEL_FONT_SCALE = 2
 
+# Tool kinds offered by the right-click menu, the same list the Claude Opus
+# labeller uses (scripts/generate-annotation-opus.py). A label read from a
+# file is shown and kept as it is even when it is not one of these.
+TOOL_LABELS = ("grasper", "bipolar", "hook", "scissors", "clipper", "irrigator", "specimen bag", "other")
+# Keys that set the selected tool's label; CLEAR_LABEL_KEY removes it.
+TOOL_LABEL_KEYS = {
+    "grasper": "g", "bipolar": "b", "hook": "h", "scissors": "s",
+    "clipper": "c", "irrigator": "i", "specimen bag": "p", "other": "o",
+}
+CLEAR_LABEL_KEY = "x"
+
 # The tool count in the status bar stands out from the rest of the readout.
 TOOL_COUNT_FONT_SCALE = 1.5
 TOOL_COUNT_FOREGROUND = "#1565c0"
@@ -727,6 +738,15 @@ class AnnotationEditor:
                 f"<Key-{number}>",
                 lambda _event, index=number - 1: self._on_tab_shortcut(index),
             )
+        # Both cases, so the keys still work with Caps Lock on.
+        for tool_label, key in TOOL_LABEL_KEYS.items():
+            for case in (key, key.upper()):
+                self.root.bind(
+                    f"<Key-{case}>",
+                    lambda _event, value=tool_label: self._on_label_shortcut(value),
+                )
+        for case in (CLEAR_LABEL_KEY, CLEAR_LABEL_KEY.upper()):
+            self.root.bind(f"<Key-{case}>", lambda _event: self._on_label_shortcut(None))
         self.tab_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         # Clicking a tab focuses the notebook, whose class bindings would then
         # cycle tabs on Left/Right. Keep the arrows stepping through images.
@@ -827,6 +847,10 @@ class AnnotationEditor:
 
     def _on_reload_shortcut(self, _event: tk.Event[tk.Misc]) -> str:
         self._reload_current_annotation()
+        return "break"
+
+    def _on_label_shortcut(self, label: str | None) -> str:
+        self._set_selected_label(label)
         return "break"
 
     def _on_tab_shortcut(self, index: int) -> str:
@@ -1765,6 +1789,16 @@ class AnnotationEditor:
             anchor=tk.NW,
             font=self.annotation_label_font,
         )
+        label = annotation.get("label")
+        if label:
+            self.canvas.create_text(
+                cx2 - 6,
+                cy1 + 6,
+                text=label,
+                fill=outline,
+                anchor=tk.NE,
+                font=self.annotation_label_font,
+            )
 
         if is_selected:
             mid_x = (cx1 + cx2) / 2
@@ -1862,7 +1896,8 @@ class AnnotationEditor:
 
         A right click on a tool selects it first, like a left click. With a tool
         selected the menu offers Add or Remove Second Tip, whichever applies,
-        then Delete Tool; with none it offers Add Tool. Cancel, Esc or a click
+        a Label submenu (the tool kinds and Clear Label), then Delete Tool;
+        with none it offers Add Tool. Cancel, Esc or a click
         outside closes it.
         """
         if self.current_image_rgb is None or self.mode == "add":
@@ -1893,6 +1928,28 @@ class AnnotationEditor:
                 menu.add_command(
                     label="Add Second Tip", command=lambda: self._add_second_tip(image_x, image_y)
                 )
+            current_label = self.current_annotations[self.selected_annotation_index].get("label")
+            label_menu = tk.Menu(menu, tearoff=False)
+            # The menu is rebuilt on every right click, so the variable only
+            # marks the current label; the commands do the setting. It is kept
+            # on self because tk_popup returns while the menu is still open,
+            # and a garbage-collected StringVar would drop the mark.
+            label_var = tk.StringVar(menu, value=current_label or "")
+            self.label_menu_var = label_var
+            for tool_label in TOOL_LABELS:
+                label_menu.add_radiobutton(
+                    label=f"({TOOL_LABEL_KEYS[tool_label]}) {tool_label}",
+                    value=tool_label,
+                    variable=label_var,
+                    command=lambda value=tool_label: self._set_selected_label(value),
+                )
+            label_menu.add_separator()
+            label_menu.add_command(
+                label=f"({CLEAR_LABEL_KEY}) Clear Label",
+                command=lambda: self._set_selected_label(None),
+                state=tk.NORMAL if current_label else tk.DISABLED,
+            )
+            menu.add_cascade(label="Label", menu=label_menu)
             delete_color = BUTTON_STYLES["Delete.TButton"]
             menu.add_command(
                 label="Delete Tool",
@@ -1925,6 +1982,19 @@ class AnnotationEditor:
             "x": self._clamp_int(int(round(image_x)), bbox["x"], bbox["x"] + bbox["width"] - 1),
             "y": self._clamp_int(int(round(image_y)), bbox["y"], bbox["y"] + bbox["height"] - 1),
         }
+        self._mark_dirty()
+
+    def _set_selected_label(self, label: str | None) -> None:
+        """Set the selected tool's kind, or remove it when label is None."""
+        if self.selected_annotation_index is None:
+            return
+        annotation = self.current_annotations[self.selected_annotation_index]
+        if annotation.get("label") == label:
+            return
+        if label is None:
+            annotation.pop("label", None)
+        else:
+            annotation["label"] = label
         self._mark_dirty()
 
     def _remove_second_tip(self) -> None:
